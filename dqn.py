@@ -1,12 +1,5 @@
 import torch.nn as nn
-import torch.optim as optim
-import gym
 import torch
-from torch.distributions import Categorical, Normal
-from torch.nn.functional import mse_loss
-import numpy as np
-from torch.optim.lr_scheduler import StepLR
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 # In[]:
 
@@ -34,7 +27,7 @@ class ReplayBuffer:
         sample_transitions = {}
         if self.__len__() >= sample_size:
             # pick up only random 32 events from the memory
-            indices = np.random.choice(self.__len__(), size=sample_size)
+            indices = torch.randperm(self.__len__())[:sample_size]
             sample_transitions['cur_states'] = torch.stack(self.cur_states)[indices]
             sample_transitions['actions'] = torch.stack(self.actions)[indices]
             sample_transitions['next_states'] = torch.stack(self.next_states)[indices]
