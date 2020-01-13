@@ -1,5 +1,7 @@
 import torch.nn as nn
 import torch
+import numpy as np
+
 
 # In[]:
 
@@ -27,7 +29,8 @@ class ReplayBuffer:
         sample_transitions = {}
         if self.__len__() >= sample_size:
             # pick up only random 32 events from the memory
-            indices = torch.randperm(self.__len__())[:sample_size]
+            # TODO : Replace np with torch functionality and remove import numpy from above
+            indices = np.random.choice(self.__len__(), size=sample_size)
             sample_transitions['cur_states'] = torch.stack(self.cur_states)[indices]
             sample_transitions['actions'] = torch.stack(self.actions)[indices]
             sample_transitions['next_states'] = torch.stack(self.next_states)[indices]
@@ -45,10 +48,10 @@ class ReplayBuffer:
 
 # In[]:
 
+
 class DQN(nn.Module):
     def __init__(self, input_size, output_size, hidden_size):
         super(DQN, self).__init__()
-        self.num_actions = output_size
         self.layer1 = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.ReLU()
@@ -85,4 +88,4 @@ class DQN(nn.Module):
             return action
         else:
             # else take a random exploration action
-            return torch.randint(low=0, high=self.num_actions+1, size=(1,)).item()
+            return torch.randint(low=0, high=self.output_layer.out_features+1, size=(1,))
