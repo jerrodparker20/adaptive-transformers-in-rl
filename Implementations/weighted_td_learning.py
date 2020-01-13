@@ -33,7 +33,7 @@ def run_current_policy(env, policy):
 gamma = 0.95
 learning_rate = 0.001
 
-avg_history = {'episodes': [], 'timesteps': [], 'reward': []}
+avg_history = {'episodes': [], 'timesteps': [], 'reward': [], 'loss_unweighted': [], 'loss_weighted': []}
 agg_interval = 10
 
 # initialize policy and replay buffer
@@ -105,13 +105,17 @@ def update_weighted_policy(cur_state, next_state, reward, cur_states):
 
 # Train the network to predict actions for each of the states
 for episode_i in range(train_episodes):
-    episode_timestep = 0
-    episode_reward = 0.0
 
+    episode_timestep_unweighted = 0
+    episode_timestep_weighted = 0
+    episode_unweighted_reward = 0.0
+    episode_weighted_reward = 0
+    loss1_cumulative = 0
+    loss2_cumulative = 0
+
+    # play with unweighted standard policy
     done = False
-
     cur_state = torch.Tensor(env.reset())
-
     while not done:
         # select action
         action = policy.select_action(cur_state)
@@ -128,20 +132,54 @@ for episode_i in range(train_episodes):
         sample_transitions = replay_buffer.sample()
 
         # update the policy using the sampled transitions
-        update_policy(**sample_transitions)
-        update_weighted_policy(cur_state, next_state, reward, sample_transitions['cur_states'])
+        loss1 = update_policy(**sample_transitions)
 
-        episode_reward += reward
-        episode_timestep += 1
+        episode_unweighted_reward += reward
+        episode_timestep_unweighted += 1
+        loss1_cumulative += loss1
 
         cur_state = next_state
 
+    # Now play with weighted policy
+    done = False
+    cur_state = torch.Tensor(env.reset())
+    while not done:
+        # select action
+        action = policy_weighted.select_action(cur_state)
+
+        # take action in the environment
+        next_state, reward, done, info = env.step(action.item())
+        next_state = torch.Tensor(next_state)
+
+        # add the transition to replay buffer
+        replay_buffer.add(cur_state, action, next_state, reward, done)
+
+        # sample minibatch of transitions from the replay buffer
+        # the sampling is done every timestep and not every episode
+        sample_transitions = replay_buffer.sample()
+
+        # update the policy using the sampled transitions
+        loss2 = update_weighted_policy(cur_state, next_state, reward, sample_transitions['cur_states'])
+
+        episode_weighted_reward += reward
+        episode_timestep_unweighted += 1
+        loss2_cumulative += loss2
+        cur_state = next_state
+
     avg_history['episodes'].append(episode_i + 1)
-    avg_history['timesteps'].append(episode_timestep)
-    avg_history['reward'].append(episode_reward)
+    avg_history['timesteps_unweighted'].append(episode_timestep_unweighted)
+    avg_history['timesteps_weighted'].append(episode_timestep_weighted)
+    avg_history['unweighted_reward'].append(episode_unweighted_reward)
+    avg_history['weighted_reward'].append(episode_weighted_reward)
+    avg_history['loss_unweighted'].append(loss1_cumulative/episode_timestep_unweighted)
+    avg_history['loss_weighted'].append(loss2_cumulative/episode_timestep_weighted)
+
 
     if (episode_i + 1) % agg_interval == 0:
-        print('Episode : ', episode_i+1, 'Avg Timestep : ', avg_history['timesteps'][-1])
+        print('Episode : ', episode_i+1, 'Timesteps1 : ',
+              avg_history['timesteps_unweighted'][-1], 'Timesteps2 : ', avg_history['timesteps_weighted'][-1],
+              'Loss1 :', avg_history['loss_unweighted'][-1], 'Loss2 : ', avg_history['loss_weighted'][-1]
+              )
 
 start_episode = start_episode + train_episodes
 plot_timesteps_and_rewards(avg_history)
