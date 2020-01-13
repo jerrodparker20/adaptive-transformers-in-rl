@@ -105,9 +105,16 @@ def get_target_and_predicted(cur_state, next_state, reward, action, next_states,
     # denominator = self_weight.norm(p=2) * weights_sampled_neighbors.norm(p=2, dim=1)
     # weights = weights.squeeze(-1) / denominator
 
-    weights = torch.dist(weights_sampled_neighbors, self_weight)
+    # torch.sqrt(torch.sum(torch.pow(weights_sampled_neighbors-self_weight, 2), dim=1)).detach() ==
+    # torch.cdist(weights_sampled_neighbors, self_weight.reshape(1, -1)).squeeze(-1).detach() results in True for all
+    # so cdist() is the way to go
+    weights = 1 / (1 + torch.cdist(weights_sampled_neighbors, self_weight.reshape(1, -1)))
+    # this weight can be used for weighing the samples, and then do TD learning
 
-    # todo : sanity check this equation
+"""
+# TODO : There is too much manual fideling here. We're moving ahead to Transformers as value networks
+"""
+
     weights = torch.pow(weights, power)
 
     """ removed the softmax since it seems like an expectation otherwise. The effect of good states are negligible 
