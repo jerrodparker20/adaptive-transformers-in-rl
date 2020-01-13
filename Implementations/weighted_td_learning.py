@@ -1,4 +1,3 @@
-from tqdm.autonotebook import tqdm
 import gym
 import torch
 from dqn import DQN, ReplayBuffer
@@ -8,19 +7,19 @@ from plot_functions import plot_timesteps_and_rewards
 
 # In[]:
 
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 
 # In[]:
 
 
-def run_current_policy(env, epsilon):
+def run_current_policy(env, policy):
     cur_state = env.reset()
     cur_state = torch.Tensor(cur_state)
     total_step = 0
     total_reward = 0.0
     done = False
     while not done:
-        action = policy.select_action(cur_state, epsilon)
+        action = policy.select_action(cur_state, 0)
         next_state, reward, done, info = env.step(action.item())
         next_state = torch.Tensor(next_state)
         total_reward += reward
@@ -32,16 +31,18 @@ def run_current_policy(env, epsilon):
 # In[]:
 
 gamma = 0.95
-epsilon = 0.05
-learning_rate = 0.01
+learning_rate = 0.001
 
 avg_history = {'episodes': [], 'timesteps': [], 'reward': []}
-agg_interval = 1
-avg_reward = 0.0
-avg_timestep = 0
+agg_interval = 10
 
 # initialize policy and replay buffer
-policy = DQN(input_size=env.observation_space.shape[0], output_size=env.action_space.n, hidden_size=12)
+policy = DQN(input_size=env.observation_space.shape[0], output_size=env.action_space.n, hidden_size=24)
+
+# TODO : Check if this can perform better in a smaller no. of hidden sizes
+policy_weighted = DQN(input_size=env.observation_space.shape[0], output_size=env.action_space.n, hidden_size=24)
+optimizer_weighted = Adam(policy_weighted.parameters(), lr=learning_rate)
+
 replay_buffer = ReplayBuffer()
 
 optimizer = Adam(policy.parameters(), lr=learning_rate)
@@ -51,7 +52,6 @@ start_episode = 0
 # run_current_policy(env.env, policy)
 
 train_episodes = 200
-pbar_cp = tqdm(total=train_episodes)
 
 # In[]:
 
@@ -71,6 +71,36 @@ def update_policy(cur_states, actions, next_states, rewards, dones):
     return loss.item()
 
 
+def update_weighted_policy(cur_state, next_state, reward, cur_states):
+    """
+    performs a weighted td update by sampling states and weighing them as per the angle between
+     the cur_state and the sampled states
+    :param cur_state: the current state
+    :param next_state: the next state
+    :param reward: the reward for cur_State -> next_state transition
+    :param cur_states: the sampled states from the replay_buffer
+    :return: the loss computed
+    """
+    # get the weights of the sampled neighbors
+    weights_sampled_neighbors = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(cur_states)))
+    self_weight = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(cur_state)))
+    # get the weights as per the angle between cur_state and the sampled states
+    weights = torch.mm(weights_sampled_neighbors, self_weight.reshape((-1, 1)))
+
+    weights = ( weights - weights.mean() ) / (weights.std() + 0.001)
+    weights = weights.softmax(dim=0).detach()
+
+    # construct the target
+    target = reward + gamma*policy_weighted(next_state).max()
+
+    predicted = torch.mul(policy_weighted(cur_states).max(dim=1).values, weights.squeeze(-1))
+    # the implementation is (input-target)^2
+    optimizer_weighted.zero_grad()
+    loss = mse_loss(input=target, target=predicted)
+    loss.backward()
+    optimizer_weighted.step()
+    return loss.item()
+
 # In[]:
 
 # Train the network to predict actions for each of the states
@@ -84,7 +114,7 @@ for episode_i in range(train_episodes):
 
     while not done:
         # select action
-        action = policy.select_action(cur_state, epsilon)
+        action = policy.select_action(cur_state)
 
         # take action in the environment
         next_state, reward, done, info = env.step(action.item())
@@ -99,24 +129,21 @@ for episode_i in range(train_episodes):
 
         # update the policy using the sampled transitions
         update_policy(**sample_transitions)
+        update_weighted_policy(cur_state, next_state, reward, sample_transitions['cur_states'])
 
         episode_reward += reward
         episode_timestep += 1
 
         cur_state = next_state
 
-    avg_reward += episode_reward
-    avg_timestep += episode_timestep
+    avg_history['episodes'].append(episode_i + 1)
+    avg_history['timesteps'].append(episode_timestep)
+    avg_history['reward'].append(episode_reward)
 
     if (episode_i + 1) % agg_interval == 0:
-        avg_history['episodes'].append(episode_i + 1)
-        avg_history['timesteps'].append(avg_timestep / float(agg_interval))
-        avg_history['reward'].append(avg_reward / float(agg_interval))
-        avg_timestep = 0
-        avg_reward = 0.0
-    pbar_cp.update()
+        print('Episode : ', episode_i+1, 'Avg Timestep : ', avg_history['timesteps'][-1])
 
 start_episode = start_episode + train_episodes
 plot_timesteps_and_rewards(avg_history)
-run_current_policy(env, epsilon)
+run_current_policy(env, policy)
 env.close()
