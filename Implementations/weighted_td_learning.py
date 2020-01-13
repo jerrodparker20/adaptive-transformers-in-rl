@@ -29,9 +29,10 @@ def run_current_policy(env, policy):
 
 # In[]:
 
-gamma = 0.95
+gamma = 0.99
 learning_rate_unweighted = 0.001
-learning_rate_weighted = 1e-3
+learning_rate_weighted = 1e-2
+update_episode = 5
 weight_decay = 10
 
 avg_history = {'episodes': [], 'timesteps_unweighted': [], 'timesteps_weighted': [],
@@ -75,7 +76,52 @@ def update_policy(cur_states, actions, next_states, rewards, dones):
     return loss.item()
 
 
-def update_weighted_policy(cur_state, next_state, reward, action, next_states, power):
+def get_target_and_predicted(cur_state, next_state, reward, action, next_states, power):
+    """
+    performs a weighted td update by sampling states and weighing them as per the angle between
+     the cur_state and the sampled states
+    :param cur_state: the current state
+    :param next_state: the next state
+    :param reward: the reward for cur_State -> next_state transition
+    :param cur_states: the sampled states from the replay_buffer_weighted
+    :return: the loss computed
+    """
+    # append the next_state to the sampled next_states
+    next_states = torch.cat([next_states, next_state.reshape((1, -1))])
+
+
+    # get the weights of the sampled neighbors
+    weights_sampled_neighbors = policy_weighted.layer1(next_states)
+    self_weight = policy_weighted.layer1(next_state)
+
+    # get the angle between next_state and the sampled next_states
+    """Getting the angle between the vectors doesnt seem to be a good similarity metric here. The reason for this is 
+    that most of the dimensions are zero when you take weights_sampled_neighbors and self_weight vectors.
+    Most of the dimensions are zero because they are projections from 4 dimensional space to a 24 dimensional space, 
+    which just makes most axes off. COS of the angle in this case is dominated by those off axes and the cos(theta)
+    comes out to be almost equal to 1 implying that all the vectors are poitning in almost the same direction"""
+    # weights = torch.mm(weights_sampled_neighbors, self_weight.reshape((-1, 1)))
+    # divide by the l2 norm of weights_sampled_neighbors and self_weight
+    # denominator = self_weight.norm(p=2) * weights_sampled_neighbors.norm(p=2, dim=1)
+    # weights = weights.squeeze(-1) / denominator
+
+    weights = torch.dist(weights_sampled_neighbors, self_weight)
+
+    # todo : sanity check this equation
+    weights = torch.pow(weights, power)
+
+    """ removed the softmax since it seems like an expectation otherwise. The effect of good states are negligible 
+    due to softmax. It is squishing all the weights between a very small area since all the angles are acute """
+
+    # weights = weights.softmax(dim=0).detach()
+
+    # construct the target
+    target = reward + gamma * torch.dot(weights, policy_weighted(next_states).max(dim=1).values)
+    predicted = policy_weighted(cur_state)[action.item()]
+    return target.reshape(-1), predicted.reshape(-1)
+
+
+def update_weighted_policy_stochastic(cur_state, next_state, reward, action, next_states, power):
     """
     performs a weighted td update by sampling states and weighing them as per the angle between
      the cur_state and the sampled states
@@ -103,7 +149,6 @@ def update_weighted_policy(cur_state, next_state, reward, action, next_states, p
 
     # todo : check the weights are being almost the same, is this the case for all iterations or only here?
     weights = weights.softmax(dim=0).detach()
-    # TODO : Need to raise weights as per the power of no. of iterations
 
     # construct the target
     target = reward + gamma * torch.dot(weights, policy_weighted(next_states).max(dim=1).values)
@@ -111,7 +156,6 @@ def update_weighted_policy(cur_state, next_state, reward, action, next_states, p
 
     # the implementation is (input-target)^2
     optimizer_weighted.zero_grad()
-    # todo : this is a stochastic update, try updatinf this in batches
     loss = mse_loss(input=target.detach(), target=predicted)
     loss.backward()
     optimizer_weighted.step()
@@ -172,24 +216,54 @@ for episode_i in range(train_episodes):
 
         # sample minibatch of transitions from the replay buffer
         # the sampling is done every timestep and not every episode
-        sample_transitions = replay_buffer_weighted.sample(100)
+        # sample_transitions = replay_buffer_weighted.sample(100)
 
         # update the policy using the sampled transitions
-        loss2 = update_weighted_policy(cur_state, next_state, reward, action, sample_transitions['next_states'], (episode_i//weight_decay)+1)
+        # loss2 = update_weighted_policy_stochastic(cur_state, next_state, reward, action, sample_transitions['next_states'], (episode_i//weight_decay)+1)
 
         episode_weighted_reward += reward
         episode_timestep_weighted += 1
-        loss2_cumulative += loss2
+        # loss2_cumulative += loss2
         cur_state = next_state
+
+    # update the policy every update_episode episodes
+    if (episode_i+1) % update_episode == 0:
+        target_list = torch.Tensor()
+        predicted_list = torch.Tensor()
+
+        sample_states = replay_buffer_weighted.sample(100)
+        for el in range(sample_states['cur_states'].shape[0]):
+            sample_transitions = replay_buffer_weighted.sample(100)
+            target, predicted = get_target_and_predicted(sample_states['cur_states'][el],
+                                                         sample_states['next_states'][el],
+                                                         sample_states['rewards'][el],
+                                                         sample_states['actions'][el],
+                                                         sample_transitions['next_states'],
+                                                         (episode_i//weight_decay) + 1)
+            target_list = torch.cat([target_list, target])
+            predicted_list = torch.cat([predicted_list, predicted])
+
+        # the implementation is (input-target)^2
+        optimizer_weighted.zero_grad()
+
+        # normalizing to zero mean and std dev
+        target_list = (target_list - target_list.mean()) / target_list.std()
+        predicted_list = (predicted_list - predicted_list.mean()) / predicted_list.std()
+
+        loss = mse_loss(input=target_list.detach(), target=predicted_list)
+        loss.backward()
+        optimizer_weighted.step()
+        loss2_cumulative += loss.item()
+
+        avg_history['timesteps_weighted'].append(episode_timestep_weighted)
+        avg_history['weighted_reward'].append(episode_weighted_reward)
+        avg_history['loss_weighted'].append(loss2_cumulative)
 
     avg_history['episodes'].append(episode_i + 1)
     avg_history['timesteps_unweighted'].append(episode_timestep_unweighted)
     avg_history['unweighted_reward'].append(episode_unweighted_reward)
     avg_history['loss_unweighted'].append(loss1_cumulative/episode_timestep_unweighted)
 
-    avg_history['timesteps_weighted'].append(episode_timestep_weighted)
-    avg_history['weighted_reward'].append(episode_weighted_reward)
-    avg_history['loss_weighted'].append(loss2_cumulative/episode_timestep_weighted)
 
     if (episode_i + 1) % agg_interval == 0:
         print('Episode : ', episode_i+1, 'Timesteps1 : ',
@@ -204,9 +278,9 @@ matplotlib.use('Qt5Agg')
 # In[]:
 
 import matplotlib.pyplot as plt
-plt.plot(avg_history['episodes'], avg_history['loss_unweighted'], label='unweighted')
+# plt.plot(avg_history['loss_unweighted'], label='unweighted')
 plt.ylabel('loss')
-plt.plot(avg_history['episodes'], avg_history['loss_weighted'], label='weighted')
+plt.plot(avg_history['loss_weighted'], label='weighted')
 plt.legend()
 plt.show()
 
@@ -216,13 +290,13 @@ fig, axes = plt.subplots(nrows=2, ncols=2)
 fig.set_figheight(5)
 fig.set_figwidth(10)
 plt.subplots_adjust(wspace=0.5)
-axes[0][0].plot(avg_history['episodes'], avg_history['timesteps_unweighted'])
+axes[0][0].plot(avg_history['timesteps_unweighted'])
 axes[0][0].set_ylabel('Timesteps unweighted')
-axes[0][1].plot(avg_history['episodes'], avg_history['unweighted_reward'])
+axes[0][1].plot(avg_history['unweighted_reward'])
 axes[0][1].set_ylabel('Reward unweighted')
-axes[1][0].plot(avg_history['episodes'], avg_history['timesteps_weighted'])
+axes[1][0].plot(avg_history['timesteps_weighted'])
 axes[1][0].set_ylabel('Timesteps weighted')
-axes[1][1].plot(avg_history['episodes'], avg_history['weighted_reward'])
+axes[1][1].plot(avg_history['weighted_reward'])
 axes[1][1].set_ylabel('Reward weighted')
 
 
