@@ -82,10 +82,10 @@ class DQN(nn.Module):
 
         """
         q_values = self(current_state)
-        action = torch.argmax(q_values)
+        action = torch.argmax(q_values).reshape(-1)
         if torch.rand(1) > epsilon:
             # then take the argmax action
             return action
         else:
             # else take a random exploration action
-            return torch.randint(low=0, high=self.output_layer.out_features+1, size=(1,))
+            return torch.randint(low=0, high=self.output_layer.out_features, size=(1,))

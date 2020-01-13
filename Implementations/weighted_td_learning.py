@@ -8,12 +8,12 @@ from plot_functions import plot_timesteps_and_rewards
 
 # In[]:
 
-env = gym.make('CartPole-v1')
+env = gym.make('CartPole-v0')
 
 # In[]:
 
 
-def run_current_policy(env, policy, epsilon):
+def run_current_policy(env, epsilon):
     cur_state = env.reset()
     cur_state = torch.Tensor(cur_state)
     total_step = 0
@@ -21,7 +21,7 @@ def run_current_policy(env, policy, epsilon):
     done = False
     while not done:
         action = policy.select_action(cur_state, epsilon)
-        next_state, reward, done, info = env.step(action)
+        next_state, reward, done, info = env.step(action.item())
         next_state = torch.Tensor(next_state)
         total_reward += reward
         env.render(mode='rgb_array')
@@ -63,7 +63,7 @@ def update_policy(cur_states, actions, next_states, rewards, dones):
     targets = rewards + torch.mul(1 - dones, gamma * policy(next_states).max(dim=1).values)
     # expanded_targets are the Q values of all the actions for the current_states sampled
     # from the previous experience. These are the predictions
-    expanded_targets = policy(cur_states)[:, actions].squeeze(-1)
+    expanded_targets = policy(cur_states)[range(actions.shape[0]), actions.squeeze(-1).tolist()].reshape(-1,)
     optimizer.zero_grad()
     loss = mse_loss(input=expanded_targets, target=targets.detach())
     loss.backward()
@@ -118,5 +118,5 @@ for episode_i in range(train_episodes):
 
 start_episode = start_episode + train_episodes
 plot_timesteps_and_rewards(avg_history)
-run_current_policy(env, policy, epsilon)
+run_current_policy(env, epsilon)
 env.close()
