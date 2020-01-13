@@ -3,7 +3,6 @@ import torch
 from dqn import DQN, ReplayBuffer
 from torch.optim import Adam
 from torch.nn.functional import mse_loss
-from plot_functions import plot_timesteps_and_rewards
 
 # In[]:
 
@@ -31,7 +30,9 @@ def run_current_policy(env, policy):
 # In[]:
 
 gamma = 0.95
-learning_rate = 0.001
+learning_rate_unweighted = 0.001
+learning_rate_weighted = 1e-3
+weight_decay = 10
 
 avg_history = {'episodes': [], 'timesteps_unweighted': [], 'timesteps_weighted': [],
                'unweighted_reward': [], 'weighted_reward':[],
@@ -43,18 +44,18 @@ policy = DQN(input_size=env.observation_space.shape[0], output_size=env.action_s
 
 # TODO : Check if this can perform better in a smaller no. of hidden sizes
 policy_weighted = DQN(input_size=env.observation_space.shape[0], output_size=env.action_space.n, hidden_size=24)
-optimizer_weighted = Adam(policy_weighted.parameters(), lr=learning_rate)
+optimizer_weighted = Adam(policy_weighted.parameters(), lr=learning_rate_weighted)
 
 replay_buffer = ReplayBuffer()
 replay_buffer_weighted = ReplayBuffer()
 
-optimizer = Adam(policy.parameters(), lr=learning_rate)
+optimizer = Adam(policy.parameters(), lr=learning_rate_unweighted)
 start_episode = 0
 
 # Play with a random policy and see
 # run_current_policy(env.env, policy)
 
-train_episodes = 200
+train_episodes = 2000
 
 # In[]:
 
@@ -74,33 +75,44 @@ def update_policy(cur_states, actions, next_states, rewards, dones):
     return loss.item()
 
 
-def update_weighted_policy(cur_state, next_state, reward, cur_states):
+def update_weighted_policy(cur_state, next_state, reward, action, next_states, power):
     """
     performs a weighted td update by sampling states and weighing them as per the angle between
      the cur_state and the sampled states
     :param cur_state: the current state
     :param next_state: the next state
     :param reward: the reward for cur_State -> next_state transition
-    :param cur_states: the sampled states from the replay_buffer
+    :param cur_states: the sampled states from the replay_buffer_weighted
     :return: the loss computed
     """
-    # get the weights of the sampled neighbors
-    weights_sampled_neighbors = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(cur_states)))
-    self_weight = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(cur_state)))
-    # get the weights as per the angle between cur_state and the sampled states
-    weights = torch.mm(weights_sampled_neighbors, self_weight.reshape((-1, 1)))
+    # append the next_state to the sampled next_states
+    next_states = torch.cat([next_states, next_state.reshape((1, -1))])
 
-    weights = ( weights - weights.mean() ) / (weights.std(unbiased=False) + 0.001)
+    # get the weights of the sampled neighbors
+    weights_sampled_neighbors = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(next_states)))
+    self_weight = policy_weighted.layer3(policy_weighted.layer2(policy_weighted.layer1(next_state)))
+
+    # get the angle between next_state and the sampled next_states
+    weights = torch.mm(weights_sampled_neighbors, self_weight.reshape((-1, 1)))
+    # divide by the l2 norm of weights_sampled_neighbors and self_weight
+    denominator = self_weight.norm(p=2) * weights_sampled_neighbors.norm(p=2, dim=1)
+    weights = weights.squeeze(-1) / denominator
+
+    # todo : sanity check this equation
+    weights = torch.pow(weights, power)
+
+    # todo : check the weights are being almost the same, is this the case for all iterations or only here?
     weights = weights.softmax(dim=0).detach()
     # TODO : Need to raise weights as per the power of no. of iterations
 
     # construct the target
-    target = reward + gamma*policy_weighted(next_state).max()
+    target = reward + gamma * torch.dot(weights, policy_weighted(next_states).max(dim=1).values)
+    predicted = policy_weighted(cur_state)[action.item()]
 
-    predicted = torch.sum(torch.mul(policy_weighted(cur_states).max(dim=1).values, weights.squeeze(-1)))
     # the implementation is (input-target)^2
     optimizer_weighted.zero_grad()
-    loss = mse_loss(input=target.reshape(-1).detach(), target=predicted.reshape(-1))
+    # todo : this is a stochastic update, try updatinf this in batches
+    loss = mse_loss(input=target.detach(), target=predicted)
     loss.backward()
     optimizer_weighted.step()
     return loss.item()
@@ -110,39 +122,39 @@ def update_weighted_policy(cur_state, next_state, reward, cur_states):
 # Train the network to predict actions for each of the states
 for episode_i in range(train_episodes):
 
-    episode_timestep_unweighted = 0
+    episode_timestep_unweighted = 0.1
     episode_timestep_weighted = 0
     episode_unweighted_reward = 0.0
     episode_weighted_reward = 0
     loss1_cumulative = 0
     loss2_cumulative = 0
 
-    # play with unweighted standard policy
-    done = False
-    cur_state = torch.Tensor(env.reset())
-    while not done:
-        # select action
-        action = policy.select_action(cur_state)
-
-        # take action in the environment
-        next_state, reward, done, info = env.step(action.item())
-        next_state = torch.Tensor(next_state)
-
-        # add the transition to replay buffer
-        replay_buffer.add(cur_state, action, next_state, reward, done)
-
-        # sample minibatch of transitions from the replay buffer
-        # the sampling is done every timestep and not every episode
-        sample_transitions = replay_buffer.sample()
-
-        # update the policy using the sampled transitions
-        loss1 = update_policy(**sample_transitions)
-
-        episode_unweighted_reward += reward
-        episode_timestep_unweighted += 1
-        loss1_cumulative += loss1
-
-        cur_state = next_state
+    # # play with unweighted standard policy
+    # done = False
+    # cur_state = torch.Tensor(env.reset())
+    # while not done:
+    #     # select action
+    #     action = policy.select_action(cur_state)
+    #
+    #     # take action in the environment
+    #     next_state, reward, done, info = env.step(action.item())
+    #     next_state = torch.Tensor(next_state)
+    #
+    #     # add the transition to replay buffer
+    #     replay_buffer.add(cur_state, action, next_state, reward, done)
+    #
+    #     # sample minibatch of transitions from the replay buffer
+    #     # the sampling is done every timestep and not every episode
+    #     sample_transitions = replay_buffer.sample()
+    #
+    #     # update the policy using the sampled transitions
+    #     loss1 = update_policy(**sample_transitions)
+    #
+    #     episode_unweighted_reward += reward
+    #     episode_timestep_unweighted += 1
+    #     loss1_cumulative += loss1
+    #
+    #     cur_state = next_state
 
     # Now play with weighted policy
     done = False
@@ -160,10 +172,10 @@ for episode_i in range(train_episodes):
 
         # sample minibatch of transitions from the replay buffer
         # the sampling is done every timestep and not every episode
-        sample_transitions = replay_buffer_weighted.sample()
+        sample_transitions = replay_buffer_weighted.sample(100)
 
         # update the policy using the sampled transitions
-        loss2 = update_weighted_policy(cur_state, next_state, reward, sample_transitions['cur_states'])
+        loss2 = update_weighted_policy(cur_state, next_state, reward, action, sample_transitions['next_states'], (episode_i//weight_decay)+1)
 
         episode_weighted_reward += reward
         episode_timestep_weighted += 1
@@ -178,9 +190,6 @@ for episode_i in range(train_episodes):
     avg_history['timesteps_weighted'].append(episode_timestep_weighted)
     avg_history['weighted_reward'].append(episode_weighted_reward)
     avg_history['loss_weighted'].append(loss2_cumulative/episode_timestep_weighted)
-    # avg_history['timesteps_weighted'].append(0)
-    # avg_history['weighted_reward'].append(0)
-    # avg_history['loss_weighted'].append(0)
 
     if (episode_i + 1) % agg_interval == 0:
         print('Episode : ', episode_i+1, 'Timesteps1 : ',
@@ -189,8 +198,35 @@ for episode_i in range(train_episodes):
               )
 
 # In[]:
+import matplotlib
+matplotlib.use('Qt5Agg')
 
-start_episode = start_episode + train_episodes
-plot_timesteps_and_rewards(avg_history)
+# In[]:
+
+import matplotlib.pyplot as plt
+plt.plot(avg_history['episodes'], avg_history['loss_unweighted'], label='unweighted')
+plt.ylabel('loss')
+plt.plot(avg_history['episodes'], avg_history['loss_weighted'], label='weighted')
+plt.legend()
+plt.show()
+
+# In[]:
+
+fig, axes = plt.subplots(nrows=2, ncols=2)
+fig.set_figheight(5)
+fig.set_figwidth(10)
+plt.subplots_adjust(wspace=0.5)
+axes[0][0].plot(avg_history['episodes'], avg_history['timesteps_unweighted'])
+axes[0][0].set_ylabel('Timesteps unweighted')
+axes[0][1].plot(avg_history['episodes'], avg_history['unweighted_reward'])
+axes[0][1].set_ylabel('Reward unweighted')
+axes[1][0].plot(avg_history['episodes'], avg_history['timesteps_weighted'])
+axes[1][0].set_ylabel('Timesteps weighted')
+axes[1][1].plot(avg_history['episodes'], avg_history['weighted_reward'])
+axes[1][1].set_ylabel('Reward weighted')
+
+
+# In[]:
+
 run_current_policy(env, policy)
 env.close()
