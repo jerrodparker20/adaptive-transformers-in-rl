@@ -33,7 +33,9 @@ def run_current_policy(env, policy):
 gamma = 0.95
 learning_rate = 0.001
 
-avg_history = {'episodes': [], 'timesteps': [], 'reward': [], 'loss_unweighted': [], 'loss_weighted': []}
+avg_history = {'episodes': [], 'timesteps_unweighted': [], 'timesteps_weighted': [],
+               'unweighted_reward': [], 'weighted_reward':[],
+               'loss_unweighted': [], 'loss_weighted': []}
 agg_interval = 10
 
 # initialize policy and replay buffer
@@ -66,7 +68,7 @@ def update_policy(cur_states, actions, next_states, rewards, dones):
     # from the previous experience. These are the predictions
     expanded_targets = policy(cur_states)[range(actions.shape[0]), actions.squeeze(-1).tolist()].reshape(-1,)
     optimizer.zero_grad()
-    loss = mse_loss(input=expanded_targets, target=targets.detach())
+    loss = mse_loss(input=targets.detach(), target=expanded_targets)
     loss.backward()
     optimizer.step()
     return loss.item()
@@ -88,16 +90,17 @@ def update_weighted_policy(cur_state, next_state, reward, cur_states):
     # get the weights as per the angle between cur_state and the sampled states
     weights = torch.mm(weights_sampled_neighbors, self_weight.reshape((-1, 1)))
 
-    weights = ( weights - weights.mean() ) / (weights.std() + 0.001)
+    weights = ( weights - weights.mean() ) / (weights.std(unbiased=False) + 0.001)
     weights = weights.softmax(dim=0).detach()
+    # TODO : Need to raise weights as per the power of no. of iterations
 
     # construct the target
     target = reward + gamma*policy_weighted(next_state).max()
 
-    predicted = torch.mul(policy_weighted(cur_states).max(dim=1).values, weights.squeeze(-1))
+    predicted = torch.sum(torch.mul(policy_weighted(cur_states).max(dim=1).values, weights.squeeze(-1)))
     # the implementation is (input-target)^2
     optimizer_weighted.zero_grad()
-    loss = mse_loss(input=target, target=predicted)
+    loss = mse_loss(input=target.reshape(-1).detach(), target=predicted.reshape(-1))
     loss.backward()
     optimizer_weighted.step()
     return loss.item()
@@ -169,12 +172,15 @@ for episode_i in range(train_episodes):
 
     avg_history['episodes'].append(episode_i + 1)
     avg_history['timesteps_unweighted'].append(episode_timestep_unweighted)
-    avg_history['timesteps_weighted'].append(episode_timestep_weighted)
     avg_history['unweighted_reward'].append(episode_unweighted_reward)
-    avg_history['weighted_reward'].append(episode_weighted_reward)
     avg_history['loss_unweighted'].append(loss1_cumulative/episode_timestep_unweighted)
-    avg_history['loss_weighted'].append(loss2_cumulative/episode_timestep_weighted)
 
+    avg_history['timesteps_weighted'].append(episode_timestep_weighted)
+    avg_history['weighted_reward'].append(episode_weighted_reward)
+    avg_history['loss_weighted'].append(loss2_cumulative/episode_timestep_weighted)
+    # avg_history['timesteps_weighted'].append(0)
+    # avg_history['weighted_reward'].append(0)
+    # avg_history['loss_weighted'].append(0)
 
     if (episode_i + 1) % agg_interval == 0:
         print('Episode : ', episode_i+1, 'Timesteps1 : ',
