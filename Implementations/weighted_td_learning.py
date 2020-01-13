@@ -44,6 +44,7 @@ policy_weighted = DQN(input_size=env.observation_space.shape[0], output_size=env
 optimizer_weighted = Adam(policy_weighted.parameters(), lr=learning_rate)
 
 replay_buffer = ReplayBuffer()
+replay_buffer_weighted = ReplayBuffer()
 
 optimizer = Adam(policy.parameters(), lr=learning_rate)
 start_episode = 0
@@ -152,17 +153,17 @@ for episode_i in range(train_episodes):
         next_state = torch.Tensor(next_state)
 
         # add the transition to replay buffer
-        replay_buffer.add(cur_state, action, next_state, reward, done)
+        replay_buffer_weighted.add(cur_state, action, next_state, reward, done)
 
         # sample minibatch of transitions from the replay buffer
         # the sampling is done every timestep and not every episode
-        sample_transitions = replay_buffer.sample()
+        sample_transitions = replay_buffer_weighted.sample()
 
         # update the policy using the sampled transitions
         loss2 = update_weighted_policy(cur_state, next_state, reward, sample_transitions['cur_states'])
 
         episode_weighted_reward += reward
-        episode_timestep_unweighted += 1
+        episode_timestep_weighted += 1
         loss2_cumulative += loss2
         cur_state = next_state
 
@@ -180,6 +181,8 @@ for episode_i in range(train_episodes):
               avg_history['timesteps_unweighted'][-1], 'Timesteps2 : ', avg_history['timesteps_weighted'][-1],
               'Loss1 :', avg_history['loss_unweighted'][-1], 'Loss2 : ', avg_history['loss_weighted'][-1]
               )
+
+# In[]:
 
 start_episode = start_episode + train_episodes
 plot_timesteps_and_rewards(avg_history)
