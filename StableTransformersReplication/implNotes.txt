@@ -1,0 +1,17 @@
+
+
+Here are notes on the training procedure used in TXL.
+
+1. How does adaptive embedding work? The complicated version div_val==2 doesn't seem to actually be used (must have been experimental)
+    This seems to just me a normal learned embedding layer.
+
+
+How does choosing what goes in a batch happen (do we use consecutive segments so that cache doesn't get too large?)
+How does masking work?
+
+What are tgt_len, mem_len and ext_len?
+
+
+LMOrderedIterator:
+They've just implemented batches coming sequentially which may be unoptimal (semi correlated updates)
+This allows them at each step to just store memory from previous step. (can make a better iterator than this***)

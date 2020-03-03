@@ -1,12 +1,22 @@
 
 '''
 This model can be ran as the original transformer XL or the stable transformer XL. Much of this code came from
-https://github.com/kimiyoung/transformer-xl
+https://github.com/kimiyoung/transformer-xl  but now has added functionality to use gating as well as different
+orderings of the submodules as done in https://arxiv.org/pdf/1910.06764.pdf
 
 
 TO DO:
     1. Figure out how we'll actually run this (how is cache kept and so on?)
+        a) need to rewrite the training script (will assume functionality for batching previous examples exists)
     2. CHECK THIS: Have I applied layer norms in correct order?
+    3. Initialize b_g (one of the bias' in GRU) to 2
+    4. They use 256dim embedding, 512 memory size
+    5. Add in action set from table 5 of paper (15 actions) (is even more simple for some in table 6)
+
+Remember: Receptive field in transformer XL is linear in #layers and segment size
+
+
+
 
 '''
 
@@ -310,7 +320,7 @@ class MemTransformerLM(nn.Module):
                  tgt_len=None, ext_len=None, mem_len=None,
                  cutoffs=[], adapt_inp=False,
                  same_length=False, clamp_len=-1,
-                 sample_softmax=-1):
+                 use_gate=True, use_stable_version=True):
         super(MemTransformerLM, self).__init__()
         self.n_token = n_token
 
@@ -336,10 +346,10 @@ class MemTransformerLM(nn.Module):
             self.layers.append(
                 RelPartialLearnableDecoderLayer(
                     n_head, d_model, d_head, d_inner, dropout,
+                    use_stable_version=use_stable_version, use_gate=use_gate,
                     tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
-                    dropatt=dropatt, pre_lnorm=pre_lnorm)
+                    dropatt=dropatt)
             )
-
 
         #To do: Look into sample softmax and adaptive softmax for future, not relevant here though
         # are useful when need fast softmax over many classes
@@ -353,29 +363,15 @@ class MemTransformerLM(nn.Module):
         self.sample_softmax = -1
 
     def _create_params(self):
-        if self.attn_type == 0: # default attention
-            self.pos_emb = PositionalEmbedding(self.d_model)
-            self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
-            self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
-        elif self.attn_type == 1: # learnable
-            self.r_emb = nn.Parameter(torch.Tensor(
-                    self.n_layer, self.max_klen, self.n_head, self.d_head))
-            self.r_w_bias = nn.Parameter(torch.Tensor(
-                    self.n_layer, self.n_head, self.d_head))
-            self.r_bias = nn.Parameter(torch.Tensor(
-                    self.n_layer, self.max_klen, self.n_head))
-        elif self.attn_type == 2: # absolute standard
-            self.pos_emb = PositionalEmbedding(self.d_model)
-        elif self.attn_type == 3: # absolute deeper SA
-            self.r_emb = nn.Parameter(torch.Tensor(
-                    self.n_layer, self.max_klen, self.n_head, self.d_head))
+        self.pos_emb = PositionalEmbedding(self.d_model)
+        self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
+        self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
 
     def reset_length(self, tgt_len, ext_len, mem_len):
         self.tgt_len = tgt_len
         self.mem_len = mem_len
         self.ext_len = ext_len
 
-    #QUESTION: What is happening here?
     def init_mems(self):
         if self.mem_len > 0:
             mems = []
@@ -414,14 +410,14 @@ class MemTransformerLM(nn.Module):
         return new_mems
 
     def _forward(self, dec_inp, mems=None):
-        qlen, bsz = dec_inp.size() #NOTE: qlen seems to be number of characters in input ex
+        qlen, bsz = dec_inp.size() #qlen is number of characters in input ex
 
-        word_emb = self.state_emb(dec_inp)
+        obs_emb = self.state_emb(dec_inp)
 
         mlen = mems[0].size(0) if mems is not None else 0
         klen = mlen + qlen
         if self.same_length: #DONT THINK WE WANT SAME LENGTH (I think this just makes each token have same attention span)
-            all_ones = word_emb.new_ones(qlen, klen)
+            all_ones = obs_emb.new_ones(qlen, klen)
             mask_len = klen - self.mem_len
             if mask_len > 0:
                 mask_shift_len = qlen - mask_len
@@ -431,16 +427,16 @@ class MemTransformerLM(nn.Module):
                     + torch.tril(all_ones, -mask_shift_len)).byte()[:, :, None] # -1
         else:
             dec_attn_mask = torch.triu(
-                word_emb.new_ones(qlen, klen), diagonal=1+mlen).byte()[:,:,None]
+                obs_emb.new_ones(qlen, klen), diagonal=1+mlen).byte()[:,:,None]
 
         hids = []
-        pos_seq = torch.arange(klen-1, -1, -1.0, device=word_emb.device,
-                               dtype=word_emb.dtype)
+        pos_seq = torch.arange(klen-1, -1, -1.0, device=obs_emb.device,
+                               dtype=obs_emb.dtype)
         if self.clamp_len > 0:
             pos_seq.clamp_(max=self.clamp_len)
         pos_emb = self.pos_emb(pos_seq)
 
-        core_out = self.drop(word_emb)
+        core_out = self.drop(obs_emb)
         pos_emb = self.drop(pos_emb)
 
         hids.append(core_out)
@@ -470,4 +466,4 @@ class MemTransformerLM(nn.Module):
 
         pred_hid = hidden[-tgt_len:]
 
-        return F.softmax(pred_hid) #NEED TO CHANGE THIS
+        return F.softmax(pred_hid) #NEED TO CHANGE THIS (ADD MLP that maps to correct # actions
