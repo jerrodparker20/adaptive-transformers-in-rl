@@ -1,5 +1,4 @@
-
-'''
+"""
 This model can be ran as the original transformer XL or the stable transformer XL. Much of this code came from
 https://github.com/kimiyoung/transformer-xl  but now has added functionality to use gating as well as different
 orderings of the submodules as done in https://arxiv.org/pdf/1910.06764.pdf
@@ -14,11 +13,7 @@ TO DO:
     5. Add in action set from table 5 of paper (15 actions) (is even more simple for some in table 6)
 
 Remember: Receptive field in transformer XL is linear in #layers and segment size
-
-
-
-
-'''
+"""
 
 
 import torch
@@ -57,12 +52,12 @@ class GRUGate(nn.Module):
         #d_model is dimension of embedding for each token as input to layer (want to maintain this in the gate)
         super(GRUGate,self).__init__()
 
-        self.linear_w_r = Linear(d_model,d_model,bias=False)
-        self.linear_u_r = Linear(d_model,d_model,bias=False)
-        self.linear_w_z = Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
-        self.linear_u_z = Linear(d_model, d_model,bias=False)
-        self.linear_w_g = Linear(d_model, d_model,bias=False)
-        self.linear_u_g = Linear(d_model, d_model,bias=False)
+        self.linear_w_r = nn.Linear(d_model,d_model,bias=False)
+        self.linear_u_r = nn.Linear(d_model,d_model,bias=False)
+        self.linear_w_z = nn.Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
+        self.linear_u_z = nn.Linear(d_model, d_model,bias=False)
+        self.linear_w_g = nn.Linear(d_model, d_model,bias=False)
+        self.linear_u_g = nn.Linear(d_model, d_model,bias=False)
 
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
@@ -71,8 +66,6 @@ class GRUGate(nn.Module):
         r = F.sigmoid(self.linear_w_r(y) + self.linear_u_r(x))
         h_hat = F.tanh(self.linear_w_g(y) + self.linear_u_g(r*x))  #Note elementwise multiplication of r and x
         return (1.-z)*x + z*h_hat
-
-
 
 
 class PositionwiseFF(nn.Module):
@@ -93,10 +86,8 @@ class PositionwiseFF(nn.Module):
 
     #QUESTION: WHAT IS shape of inp to make this work (elementwise fnn and have batch dim)
     def forward(self, inp):
-
         ##### positionwise feed-forward (this is what's used in original transformer)
         core_out = self.CoreNet(inp)
-
         return core_out
 
 
@@ -128,7 +119,6 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         output2 = self.layer_norm2(output+output2)
         return output2
 
-
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
@@ -153,15 +143,12 @@ class RelPartialLearnableDecoderLayer(nn.Module):
 
         return dec_inp3
 
-
     def forward(self,dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         if self.use_stable_version:
             return self.forward_stable(dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask, mems)
 
         return self.forward_orig(dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask, mems)
-
-
 
 
 class RelMultiHeadAttn(nn.Module):
@@ -236,8 +223,6 @@ class RelMultiHeadAttn(nn.Module):
         raise NotImplementedError
 
 
-
-
 class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
     def __init__(self, *args, **kwargs):
         super(RelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
@@ -310,7 +295,6 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         #output = self.layer_norm(w + attn_out)
 
         return attn_out
-
 
 
 class MemTransformerLM(nn.Module):
