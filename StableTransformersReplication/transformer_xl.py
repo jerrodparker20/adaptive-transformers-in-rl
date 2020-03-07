@@ -92,7 +92,7 @@ class PositionwiseFF(nn.Module):
 
 
 class RelPartialLearnableDecoderLayer(nn.Module):
-    def __init__(self, n_head, d_model, d_head, d_inner, dropout,use_gate,use_stable_version,
+    def __init__(self, n_head, d_model, d_head, d_inner, dropout, use_gate, use_stable_version, adapt_span_enabled=False,
                  **kwargs):
         super(RelPartialLearnableDecoderLayer, self).__init__()
 
@@ -104,7 +104,7 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         self.norm2 = LayerNorm(d_model)
 
         self.dec_attn = RelPartialLearnableMultiHeadAttn(n_head, d_model,
-                            d_head, dropout, **kwargs)
+                            d_head, dropout, adapt_span_enabled, **kwargs)
         self.pos_ff = PositionwiseFF(d_model, d_inner, dropout)
         self.layer_norm1 = nn.LayerNorm(d_model)
         self.layer_norm2 = nn.LayerNorm(d_model)
@@ -153,13 +153,14 @@ class RelPartialLearnableDecoderLayer(nn.Module):
 
 class RelMultiHeadAttn(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout, dropatt=0,
-                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False):
+                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False, adapt_span_enabled=False):
         super(RelMultiHeadAttn, self).__init__()
 
         self.n_head = n_head
         self.d_model = d_model
         self.d_head = d_head
         self.dropout = dropout
+        self.adapt_span_enabled = adapt_span_enabled
 
         #Get query, key and value for each token (NOTE SOME Inefficiency since
         #don't need query for any of the memory. Parallelization must make up for it
@@ -278,6 +279,13 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         # [qlen x klen x bsz x n_head]
         attn_prob = F.softmax(attn_score, dim=1)
+
+        # Now apply the adaptive attention span here
+        if self.adapt_span_enabled:
+            # trim attention lengths according to the learned span
+            attn_prob = self.adaptive_span(attn_prob)
+            # TODO : Check if this causes any change in dimensions of the attn_prob
+
         attn_prob = self.dropatt(attn_prob)
 
         #### compute attention vector
