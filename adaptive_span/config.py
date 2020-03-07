@@ -37,7 +37,7 @@ PARAMS_CONFIG = {
     #     },
     # },
     # # model-specific
-    # 'model_params': {
+    'model_params': {
     #     '--hid-sz': {
     #         'type': int,
     #         'default': 256,
@@ -63,25 +63,27 @@ PARAMS_CONFIG = {
     #                 '(the length of sequence to process in parallel)',
     #         'dest': 'block_size'
     #     },
-    #     '--nheads': {
-    #         'type': int,
-    #         'default': 2,
-    #         'help': 'number of self-attention heads',
-    #         'dest': 'nb_heads'
-    #     },
-    #     '--attn-span': {
-    #         'type': int,
-    #         'default': 32,
-    #         'help': 'length of the attention span',
-    #         'dest': 'attn_span'
-    #     },
+        # nb_heads is used by adaptive attention span also. TODO : Might need to rename this parameter
+        '--nheads': {
+            'type': int,
+            'default': 2,
+            'help': 'number of self-attention heads',
+            'dest': 'nb_heads'
+        },
+        # This is the attn_span parameter which dictates the maximum length of the span
+        '--attn-span': {
+            'type': int,
+            'default': 32,
+            'help': 'length of the attention span',
+            'dest': 'attn_span'
+        },
     #     '--dropout': {
     #         'type': float,
     #         'default': 0.2,
     #         'help': 'dropout rate of ReLU and attention',
     #         'dest': 'dropout'
     #     },
-    # },
+    },
     # # optimization-specific
     # 'optim_params': {
     #     '--lr': {
