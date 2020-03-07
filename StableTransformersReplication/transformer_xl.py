@@ -4,15 +4,21 @@ https://github.com/kimiyoung/transformer-xl  but now has added functionality to 
 orderings of the submodules as done in https://arxiv.org/pdf/1910.06764.pdf
 
 
-TO DO:
+TODO:
     1. Figure out how we'll actually run this (how is cache kept and so on?)
         a) need to rewrite the training script (will assume functionality for batching previous examples exists)
     2. CHECK THIS: Have I applied layer norms in correct order?
     3. Initialize b_g (one of the bias' in GRU) to 2
     4. They use 256dim embedding, 512 memory size
     5. Add in action set from table 5 of paper (15 actions) (is even more simple for some in table 6)
-
-Remember: Receptive field in transformer XL is linear in #layers and segment size
+    6. IMPORTANT Need to load the environment configuration as below. It contains important dependent variables for
+        AdaptiveSpan class to work.
+            from adaptive_span.config import PARAMS_CONFIG
+            kwargs = PARAMS_CONFIG
+    7. MemTransformerLM should be callled with kwargs, this kwargs will hold the adapt_span_params
+    8. MemTransformerLM should also have attn_span parameter which will be the maximum length of the adaptive span possible
+        this value can be loaded from config.py -> model_params['attn_span'] or kwargs['model_params']['attn_span']
+    9. Remember: Receptive field in transformer XL is linear in #layers and segment size
 """
 
 
