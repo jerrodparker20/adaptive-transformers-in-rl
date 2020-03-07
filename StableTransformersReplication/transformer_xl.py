@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.normalization import LayerNorm
+from adaptive_span.adaptive_span import AdaptiveSpan
 
 
 class PositionalEmbedding(nn.Module):
@@ -153,14 +154,18 @@ class RelPartialLearnableDecoderLayer(nn.Module):
 
 class RelMultiHeadAttn(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout, dropatt=0,
-                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False, adapt_span_enabled=False):
+                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False, attn_span=None, **adapt_span_params):
         super(RelMultiHeadAttn, self).__init__()
 
         self.n_head = n_head
         self.d_model = d_model
         self.d_head = d_head
         self.dropout = dropout
-        self.adapt_span_enabled = adapt_span_enabled
+        self.adapt_span_enabled = adapt_span_params.get('adapt_span_enabled')
+
+        # construct the adaptive span layer
+        if self.adapt_span_enabled:
+            self.adaptive_span = AdaptiveSpan(attn_span=attn_span, **adapt_span_params)
 
         #Get query, key and value for each token (NOTE SOME Inefficiency since
         #don't need query for any of the memory. Parallelization must make up for it
@@ -312,7 +317,7 @@ class MemTransformerLM(nn.Module):
                  tgt_len=None, ext_len=None, mem_len=None,
                  cutoffs=[], adapt_inp=False,
                  same_length=False, clamp_len=-1,
-                 use_gate=True, use_stable_version=True):
+                 use_gate=True, use_stable_version=True, **kwargs):
         super(MemTransformerLM, self).__init__()
         self.n_token = n_token
 
@@ -340,7 +345,7 @@ class MemTransformerLM(nn.Module):
                     n_head, d_model, d_head, d_inner, dropout,
                     use_stable_version=use_stable_version, use_gate=use_gate,
                     tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
-                    dropatt=dropatt)
+                    dropatt=dropatt, **kwargs)
             )
 
         #To do: Look into sample softmax and adaptive softmax for future, not relevant here though
