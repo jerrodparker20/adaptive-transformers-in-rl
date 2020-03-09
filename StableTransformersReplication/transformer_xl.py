@@ -19,6 +19,7 @@ TODO:
     8. MemTransformerLM should also have attn_span parameter which will be the maximum length of the adaptive span possible
         this value can be loaded from config.py -> model_params['attn_span'] or kwargs['model_params']['attn_span']
     9. Remember: Receptive field in transformer XL is linear in #layers and segment size
+    10. Memory trimming should be checked, seems like it is optional from models.py and adaptive_span.py in adaptive-span-master
 """
 
 
@@ -354,7 +355,7 @@ class MemTransformerLM(nn.Module):
                     dropatt=dropatt, **kwargs)
             )
 
-        #To do: Look into sample softmax and adaptive softmax for future, not relevant here though
+        #Todo: Look into sample softmax and adaptive softmax for future, not relevant here though
         # are useful when need fast softmax over many classes
 
         self.same_length = same_length
