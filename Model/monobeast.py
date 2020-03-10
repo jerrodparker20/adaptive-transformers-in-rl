@@ -23,17 +23,20 @@ import traceback
 import typing
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
+# TODO : Check out its significance
 
 import torch
 from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
 
-from torchbeast import atari_wrappers
-from torchbeast.core import environment
-from torchbeast.core import file_writer
-from torchbeast.core import prof
-from torchbeast.core import vtrace
+from Model.core import environment, file_writer, prof, vtrace
+from Model import atari_wrappers
+# from torchbeast import atari_wrappers
+# from torchbeast.core import environment
+# from torchbeast.core import file_writer
+# from torchbeast.core import prof
+# from torchbeast.core import vtrace
 
 
 # yapf: disable
@@ -235,6 +238,12 @@ def learn(
 ):
     """Performs a learning (optimization) step."""
     with lock:
+        """
+        put a lock on the central learner,
+        send the trajectories to it.
+        Update the parameters of the central learner,
+        copy the parameters of the central learner back to the actors
+        """
         learner_outputs, unused_state = model(batch, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
@@ -346,6 +355,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     env = create_env(flags)
 
+    """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
     model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
@@ -380,6 +390,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor.start()
         actor_processes.append(actor)
 
+    """learner_model is the central learner, which takes in the experiences and updates itself"""
     learner_model = Net(
         env.observation_space.shape, env.action_space.n, flags.use_lstm
     ).to(device=flags.device)
