@@ -407,6 +407,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     def lr_lambda(epoch):
         return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
 
+    # TODO :Check if this can be changed as well
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
@@ -443,6 +444,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 to_log = dict(step=step)
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
+                print('updating step from {} to {}'.format(step, step+(T*B)))
                 step += T * B
 
         if i == 0:
@@ -641,7 +643,8 @@ class AtariNet(nn.Module):
         # if not self.use_lstm:
         #     return tuple()
         return tuple(
-            torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
+            # torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
+            torch.zeros(self.core.n_layer, batch_size, self.core.d_model)
             for _ in range(2)
         )
 
@@ -683,7 +686,8 @@ class AtariNet(nn.Module):
         # TODO : seems like core_input does have all the timesteps into it since
         #       an unbind is being called on it. It should be safe to pass core_input
         #       directly to the transformer. Check dimensions here
-        core_output = self.core(core_input, None)   # core_input is of shape (T, B, ...)
+        # TODO : the memory has been put as None here, this will be changed in the upcoming codes
+        core_output = self.core(core_input)   # core_input is of shape (T, B, ...)
         # TODO : The current memory is put as None since I've instantiated TransformerLM with
         #  mem_len = 0 above
         # for input, nd in zip(core_input.unbind(), notdone.unbind()):

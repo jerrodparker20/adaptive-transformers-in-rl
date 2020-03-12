@@ -67,9 +67,9 @@ class GRUGate(nn.Module):
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
 
-        z = F.sigmoid(self.linear_w_z(y) + self.linear_u_z(x))  #MAKE SURE THIS IS APPLIED ON PROPER AXIS
-        r = F.sigmoid(self.linear_w_r(y) + self.linear_u_r(x))
-        h_hat = F.tanh(self.linear_w_g(y) + self.linear_u_g(r*x))  #Note elementwise multiplication of r and x
+        z = torch.sigmoid(self.linear_w_z(y) + self.linear_u_z(x))  #MAKE SURE THIS IS APPLIED ON PROPER AXIS
+        r = torch.sigmoid(self.linear_w_r(y) + self.linear_u_r(x))
+        h_hat = torch.tanh(self.linear_w_g(y) + self.linear_u_g(r*x))  #Note elementwise multiplication of r and x
         return (1.-z)*x + z*h_hat
 
 
@@ -425,7 +425,12 @@ class MemTransformerLM(nn.Module):
         # So we dont need this line at all, we can replace it with the already computed output
         # obs_emb = self.state_emb(dec_inp)
 
-        mlen = mems[0].size(0) if mems is not None else 0
+        if mems is not None:
+            mlen = mems[0].size(0)
+        else:
+            mlen = 0
+        # mlen = mems[0].size(0) if mems is not None else 0
+
         klen = mlen + qlen
         if self.same_length: #DONT THINK WE WANT SAME LENGTH (I think this just makes each token have same attention span)
             all_ones = obs_emb.new_ones(qlen, klen)
