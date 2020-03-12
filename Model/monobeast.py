@@ -53,7 +53,7 @@ parser.add_argument("--xpid", default=None,
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
-parser.add_argument("--savedir", default="~/logs/torchbeast",
+parser.add_argument("--savedir", default="./logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--num_actors", default=4, type=int, metavar="N",
                     help="Number of actors (default: 4).")
@@ -69,8 +69,10 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--use_lstm", action="store_true",
-                    help="Use LSTM in agent model.")
+
+# This is by default true in our case
+# parser.add_argument("--use_lstm", action="store_true",
+#                     help="Use LSTM in agent model.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -356,7 +358,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     env = create_env(flags)
 
     """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
-    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
+    model = Net(env.observation_space.shape, env.action_space.n)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
     model.share_memory()
@@ -392,8 +394,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     """learner_model is the central learner, which takes in the experiences and updates itself"""
     learner_model = Net(
-        env.observation_space.shape, env.action_space.n, flags.use_lstm
-    ).to(device=flags.device)
+        env.observation_space.shape, env.action_space.n).to(device=flags.device)
 
     optimizer = torch.optim.RMSprop(
         learner_model.parameters(),
@@ -526,7 +527,7 @@ def test(flags, num_episodes: int = 10):
 
     gym_env = create_env(flags)
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, flags.use_lstm)
+    model = Net(gym_env.observation_space.shape, gym_env.action_space.n)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -554,7 +555,7 @@ def test(flags, num_episodes: int = 10):
 
 
 class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions, use_lstm=False):
+    def __init__(self, observation_shape, num_actions):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
@@ -622,21 +623,23 @@ class AtariNet(nn.Module):
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
         ###############################################################transformer
-        self.use_lstm = use_lstm
+        # self.use_lstm = use_lstm
         # if use_lstm:
         #     self.core = nn.LSTM(core_output_size, core_output_size, 2)
         # TODO : 1st replacement, sanity check the parameters
         # Used core_output_size in the d_model, n_head and d_head as well
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
-        self.core = MemTransformerLM(n_token=None, n_layer=12, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
+
+        # TODO : Change the n_layer=1 to 12
+        self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
                                     dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
 
     def initial_state(self, batch_size):
-        if not self.use_lstm:
-            return tuple()
+        # if not self.use_lstm:
+        #     return tuple()
         return tuple(
             torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
             for _ in range(2)
@@ -669,35 +672,35 @@ class AtariNet(nn.Module):
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
         ###############################################################transformer
-        if self.use_lstm:
-            core_input = core_input.view(T, B, -1)
-            core_output_list = []
-            notdone = (~inputs["done"]).float()
+        # if self.use_lstm:
+        core_input = core_input.view(T, B, -1)
+        core_output_list = []
+        notdone = (~inputs["done"]).float()
 
-            # TODO : We need to pass everything at once to the transformer, and not
-            #         iterate over each timestep. Check how this should be done here
+        # TODO : We need to pass everything at once to the transformer, and not
+        #         iterate over each timestep. Check how this should be done here
 
-            # TODO : seems like core_input does have all the timesteps into it since
-            #       an unbind is being called on it. It should be safe to pass core_input
-            #       directly to the transformer. Check dimensions here
-            core_output = self.core(core_input, None)   # core_input is of shape (T, B, ...)
-            # TODO : The current memory is put as None since I've instantiated TransformerLM with
-            #  mem_len = 0 above
-            # for input, nd in zip(core_input.unbind(), notdone.unbind()):
-            #     # Reset core state to zero whenever an episode ended.
-            #     # Make `done` broadcastable with (num_layers, B, hidden_size)
-            #     # states:
-            #     nd = nd.view(1, -1, 1)
-            #     core_state = tuple(nd * s for s in core_state)
-            #     output, core_state = self.core(input.unsqueeze(0), core_state)
-            #     core_output_list.append(output)
+        # TODO : seems like core_input does have all the timesteps into it since
+        #       an unbind is being called on it. It should be safe to pass core_input
+        #       directly to the transformer. Check dimensions here
+        core_output = self.core(core_input, None)   # core_input is of shape (T, B, ...)
+        # TODO : The current memory is put as None since I've instantiated TransformerLM with
+        #  mem_len = 0 above
+        # for input, nd in zip(core_input.unbind(), notdone.unbind()):
+        #     # Reset core state to zero whenever an episode ended.
+        #     # Make `done` broadcastable with (num_layers, B, hidden_size)
+        #     # states:
+        #     nd = nd.view(1, -1, 1)
+        #     core_state = tuple(nd * s for s in core_state)
+        #     output, core_state = self.core(input.unsqueeze(0), core_state)
+        #     core_output_list.append(output)
 
-            # TODO : I dont think the following line is required on core_output anymore
-            # core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
+        # TODO : I dont think the following line is required on core_output anymore
+        # core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
 
-        else:
-            core_output = core_input
-            core_state = tuple()
+        # else:
+        #     core_output = core_input
+        #     core_state = tuple()
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
