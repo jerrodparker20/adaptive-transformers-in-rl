@@ -614,7 +614,10 @@ class AtariNet(nn.Module):
 
 
         # Fully connected layer.
-        self.fc = nn.Linear(3872, 256)
+        # Changed the FC output to match the transformer input of 512 dimensions
+        transformer_in_features = 512 - num_actions - 1
+        # TODO : 3872 is the output of the conv layers, see if this needs to be changed
+        self.fc = nn.Linear(3872, transformer_in_features)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
@@ -623,8 +626,7 @@ class AtariNet(nn.Module):
         # if use_lstm:
         #     self.core = nn.LSTM(core_output_size, core_output_size, 2)
         # TODO : 1st replacement, sanity check the parameters
-        # todo : Used core_output_size in the d_model, n_head and d_head as well
-        # TODO : confirm d_head = core_output_size//8, how can a dimension mismatch here be handled?
+        # Used core_output_size in the d_model, n_head and d_head as well
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
         self.core = MemTransformerLM(n_token=None, n_layer=12, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
                                     dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
