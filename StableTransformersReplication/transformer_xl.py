@@ -459,10 +459,13 @@ class MemTransformerLM(nn.Module):
         #SEEMS THAT THEY store memory per layer which makes sense to attend to (for ex if at first layer, if we were
         #applying attention to memory and this new data, this would give us the same result.
         for i, layer in enumerate(self.layers):
+            #print('HIDDEN iter: {}, output: {}'.format(i, core_out[-1,0, :10]))
+
             mems_i = None if mems is None else mems[i]
             core_out = layer(core_out, pos_emb, self.r_w_bias,
                     self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
             hids.append(core_out)
+
 
         core_out = self.drop(core_out)
 
@@ -478,6 +481,8 @@ class MemTransformerLM(nn.Module):
         # So, have to initialize size(0) mems inside the model forward.
         # Moreover, have to return new_mems to allow nn.DataParallel to piece
         # them together.
+        #print('DATA: shape: {}, firstbit: {}'.format(data.shape,data[0,0,:5]))
+
         if not mems: mems = self.init_mems()
 
         # tgt_len = target.size(0)
@@ -487,6 +492,7 @@ class MemTransformerLM(nn.Module):
         #       happening. We can instead just take the hidden output and push it to the
         #       2 MLP which are learning the policy
         # pred_hid = hidden[-tgt_len:]
+        #print("HIDDEN SHAPE: ", hidden.shape)
         pred_hid = hidden[-1]
         # TODO : Check if this should be -1 or the entire hidden itself?
 

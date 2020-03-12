@@ -151,6 +151,8 @@ def act(
         agent_state = model.initial_state(batch_size=1)
 
         # TODO DEBUG : negative probability coming up here
+        print('Env output shape 1: ',env_output['frame'].shape)
+        print('AGENT STATE: ', agent_state)
         agent_output, unused_state = model(env_output, agent_state)
         while True:
             index = free_queue.get()
@@ -170,6 +172,8 @@ def act(
                 timings.reset()
 
                 with torch.no_grad():
+                    #HERE IS WHY B=1, T=1
+                    print('Env output shape: ',env_output['frame'].shape)
                     agent_output, agent_state = model(env_output, agent_state)
 
                 timings.time("model")
@@ -248,6 +252,9 @@ def learn(
         Update the parameters of the central learner,
         copy the parameters of the central learner back to the actors
         """
+        print('RUNNING MAIN MODEL')
+        print('MODEL OUTOUT: ', model(batch, initial_agent_state))
+        exit()
         learner_outputs, unused_state = model(batch, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
@@ -635,8 +642,12 @@ class AtariNet(nn.Module):
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
 
         # TODO : Change the n_layer=1 to 12
-        self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
-                                    dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
+        #self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
+        #                            dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
+        self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size // 8,
+                                     d_model=core_output_size, d_inner=2048,
+                                    dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0,
+                                     use_stable_version=False, use_gate=False)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
@@ -670,16 +681,23 @@ class AtariNet(nn.Module):
             x += res_input
         
         x = F.relu(x)
-        x = x.view(T * B, -1)
+        x = x.view(T * B, -1)  #WHY FLATTEN HERE
         x = F.relu(self.fc(x))
 
         one_hot_last_action = F.one_hot(
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
+
+        #what's happening here?
+        print('REWARD SHAPE: ', inputs['reward'].shape)
+        print('X shape: ', x.shape)
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
         ###############################################################transformer
         # if self.use_lstm:
+        #print('CoreInput shape: ', core_input.shape)
+
+        #BE CAREFUL WITH THIS WAY OF RESHAPING (should transpose instead)
         core_input = core_input.view(T, B, -1)
         core_output_list = []
         notdone = (~inputs["done"]).float()
@@ -694,6 +712,9 @@ class AtariNet(nn.Module):
 
         # TODO DEBUG : This line is giving all nans XD
         core_output = self.core(core_input)   # core_input is of shape (T, B, ...)
+                                              # core_output is (B, ...)
+        print('CORE OUTPUT: ',core_output[0,:10])
+        print('Core output shpae: ',core_output.shape)
         # TODO : The current memory is put as None since I've instantiated TransformerLM with
         #  mem_len = 0 above
 
@@ -716,6 +737,7 @@ class AtariNet(nn.Module):
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
+        print('POLICY SHAPE: ',policy_logits.shape)
         if self.training:
             # Sample from multinomial distribution for exploration
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
@@ -723,6 +745,7 @@ class AtariNet(nn.Module):
             # Don't sample when testing.
             action = torch.argmax(policy_logits, dim=1)
 
+        #IS THIS NECESSARY? If yes then switch to transpose
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
         action = action.view(T, B)
