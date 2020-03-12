@@ -149,6 +149,8 @@ def act(
         env = environment.Environment(gym_env)
         env_output = env.initial()
         agent_state = model.initial_state(batch_size=1)
+
+        # TODO DEBUG : negative probability coming up here
         agent_output, unused_state = model(env_output, agent_state)
         while True:
             index = free_queue.get()
@@ -651,6 +653,8 @@ class AtariNet(nn.Module):
     def forward(self, inputs, core_state=()):
 
         x = inputs["frame"]
+        # TODO DEBUG : This T and B come out to be 1, 1 each due to the env_output which is being fed.
+        #               The env_output['frame'] is a 1,1,4,84,84 tensor
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
@@ -687,9 +691,12 @@ class AtariNet(nn.Module):
         #       an unbind is being called on it. It should be safe to pass core_input
         #       directly to the transformer. Check dimensions here
         # TODO : the memory has been put as None here, this will be changed in the upcoming codes
+
+        # TODO DEBUG : This line is giving all nans XD
         core_output = self.core(core_input)   # core_input is of shape (T, B, ...)
         # TODO : The current memory is put as None since I've instantiated TransformerLM with
         #  mem_len = 0 above
+
         # for input, nd in zip(core_input.unbind(), notdone.unbind()):
         #     # Reset core state to zero whenever an episode ended.
         #     # Make `done` broadcastable with (num_layers, B, hidden_size)
