@@ -57,12 +57,12 @@ class GRUGate(nn.Module):
         #d_model is dimension of embedding for each token as input to layer (want to maintain this in the gate)
         super(GRUGate,self).__init__()
 
-        self.linear_w_r = Linear(d_model,d_model,bias=False)
-        self.linear_u_r = Linear(d_model,d_model,bias=False)
-        self.linear_w_z = Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
-        self.linear_u_z = Linear(d_model, d_model,bias=False)
-        self.linear_w_g = Linear(d_model, d_model,bias=False)
-        self.linear_u_g = Linear(d_model, d_model,bias=False)
+        self.linear_w_r = nn.Linear(d_model,d_model,bias=False)
+        self.linear_u_r = nn.Linear(d_model,d_model,bias=False)
+        self.linear_w_z = nn.Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
+        self.linear_u_z = nn.Linear(d_model, d_model,bias=False)
+        self.linear_w_g = nn.Linear(d_model, d_model,bias=False)
+        self.linear_u_g = nn.Linear(d_model, d_model,bias=False)
 
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
@@ -132,7 +132,11 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
-        dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
+        # TODO : Changed dec_inp2 to dec_inp
+        # dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
+        #                        attn_mask=dec_attn_mask,
+        #                        mems=mems, use_stable_version=self.use_stable_version)
+        dec_inp2 = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
                                attn_mask=dec_attn_mask,
                                mems=mems, use_stable_version=self.use_stable_version)
 
@@ -312,7 +316,6 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         return attn_out
 
 
-
 class MemTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
@@ -322,14 +325,14 @@ class MemTransformerLM(nn.Module):
                  same_length=False, clamp_len=-1,
                  use_gate=True, use_stable_version=True):
         super(MemTransformerLM, self).__init__()
-        self.n_token = n_token
+        self.n_token = n_token # TODO : Check this is not being used anywhere
 
         self.d_embed = d_model
         self.d_model = d_model
         self.n_head = n_head
         self.d_head = d_head
 
-        self.state_emb = State_Embedder()
+        # self.state_emb = State_Embedder()
 
         self.drop = nn.Dropout(dropout)
 
@@ -409,10 +412,18 @@ class MemTransformerLM(nn.Module):
 
         return new_mems
 
-    def _forward(self, dec_inp, mems=None):
-        qlen, bsz = dec_inp.size() #qlen is number of characters in input ex
+    # def _forward(self, dec_inp, obs_emb, mems=None):
+    # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
+    # that of dec_input, which is unrolled length = query length and batch_size
+    # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast.py
+    def _forward(self, obs_emb, mems=None):
 
-        obs_emb = self.state_emb(dec_inp)
+        qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
+        # TODO : In our case the obs_emb is 3 dimensional, so need an additional holder
+
+        # Changed, this next line already has the input from the embedding of monobeast.
+        # So we dont need this line at all, we can replace it with the already computed output
+        # obs_emb = self.state_emb(dec_inp)
 
         mlen = mems[0].size(0) if mems is not None else 0
         klen = mlen + qlen
@@ -454,6 +465,9 @@ class MemTransformerLM(nn.Module):
 
         return core_out, new_mems
 
+    # TODO : Removed target from here as we just would give the transformer output
+    #       without considering it as an autoregressive model
+    # def forward(self, data, target, *mems):
     def forward(self, data, *mems):
         # nn.DataParallel does not allow size(0) tensors to be broadcasted.
         # So, have to initialize size(0) mems inside the model forward.
@@ -461,10 +475,26 @@ class MemTransformerLM(nn.Module):
         # them together.
         if not mems: mems = self.init_mems()
 
-        tgt_len = target.size(0)
+        # tgt_len = target.size(0)
         hidden, new_mems = self._forward(data, mems=mems)
 
-        pred_hid = hidden[-tgt_len:]
+        # TODO : I dont think we need to look back here as there is no prediction of sorts
+        #       happening. We can instead just take the hidden output and push it to the
+        #       2 MLP which are learning the policy
+        # pred_hid = hidden[-tgt_len:]
+        pred_hid = hidden[-1]
+        # TODO : Check if this should be -1 or the entire hidden itself?
+
+        # TODO : Jerrod : NEED TO CHANGE THIS (ADD MLP that maps to correct # actions
+        # TODO : Shakti : I dont think so since this output will be succeeded by 2 MLPs in
+        #               monobeast.py, one will map it to num_actions, another to a value.
+        #               What do you think?
+        # return F.softmax(pred_hid)
+        return pred_hid
+
+
+if __name__ == '__main__':
+    import argparse
 
     parser = argparse.ArgumentParser(description='unit test')
 
