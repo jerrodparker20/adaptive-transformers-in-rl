@@ -21,7 +21,7 @@ import time
 import timeit
 import traceback
 import typing
-
+from StableTransformersReplication.transformer_xl import MemTransformerLM
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 # TODO : Check out its significance
 
@@ -620,8 +620,14 @@ class AtariNet(nn.Module):
         core_output_size = self.fc.out_features + num_actions + 1
         ###############################################################transformer
         self.use_lstm = use_lstm
-        if use_lstm:
-            self.core = nn.LSTM(core_output_size, core_output_size, 2)
+        # if use_lstm:
+        #     self.core = nn.LSTM(core_output_size, core_output_size, 2)
+        # TODO : 1st replacement, sanity check the parameters
+        # todo : Used core_output_size in the d_model, n_head and d_head as well
+        # TODO : confirm d_head = core_output_size//8, how can a dimension mismatch here be handled?
+        # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
+        self.core = MemTransformerLM(n_token=None, n_layer=12, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
+                                    dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
@@ -665,15 +671,28 @@ class AtariNet(nn.Module):
             core_input = core_input.view(T, B, -1)
             core_output_list = []
             notdone = (~inputs["done"]).float()
-            for input, nd in zip(core_input.unbind(), notdone.unbind()):
-                # Reset core state to zero whenever an episode ended.
-                # Make `done` broadcastable with (num_layers, B, hidden_size)
-                # states:
-                nd = nd.view(1, -1, 1)
-                core_state = tuple(nd * s for s in core_state)
-                output, core_state = self.core(input.unsqueeze(0), core_state)
-                core_output_list.append(output)
-            core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
+
+            # TODO : We need to pass everything at once to the transformer, and not
+            #         iterate over each timestep. Check how this should be done here
+
+            # TODO : seems like core_input does have all the timesteps into it since
+            #       an unbind is being called on it. It should be safe to pass core_input
+            #       directly to the transformer. Check dimensions here
+            core_output = self.core(core_input, None)   # core_input is of shape (T, B, ...)
+            # TODO : The current memory is put as None since I've instantiated TransformerLM with
+            #  mem_len = 0 above
+            # for input, nd in zip(core_input.unbind(), notdone.unbind()):
+            #     # Reset core state to zero whenever an episode ended.
+            #     # Make `done` broadcastable with (num_layers, B, hidden_size)
+            #     # states:
+            #     nd = nd.view(1, -1, 1)
+            #     core_state = tuple(nd * s for s in core_state)
+            #     output, core_state = self.core(input.unsqueeze(0), core_state)
+            #     core_output_list.append(output)
+
+            # TODO : I dont think the following line is required on core_output anymore
+            # core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
+
         else:
             core_output = core_input
             core_state = tuple()
@@ -682,6 +701,7 @@ class AtariNet(nn.Module):
         baseline = self.baseline(core_output)
 
         if self.training:
+            # Sample from multinomial distribution for exploration
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
