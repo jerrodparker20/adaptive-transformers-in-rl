@@ -62,6 +62,7 @@ class GRUGate(nn.Module):
         #d_model is dimension of embedding for each token as input to layer (want to maintain this in the gate)
         super(GRUGate,self).__init__()
 
+        # TODO: DEBUG Make sure intitialize biases to small positive number like in paper
         self.linear_w_r = nn.Linear(d_model,d_model,bias=False)
         self.linear_u_r = nn.Linear(d_model,d_model,bias=False)
         self.linear_w_z = nn.Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
@@ -71,7 +72,7 @@ class GRUGate(nn.Module):
 
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
-
+        # TODO: DEBUG MAKE SURE THIS IS APPLIED ON PROPER AXIS
         z = torch.sigmoid(self.linear_w_z(y) + self.linear_u_z(x))  #MAKE SURE THIS IS APPLIED ON PROPER AXIS
         r = torch.sigmoid(self.linear_w_r(y) + self.linear_u_r(x))
         h_hat = torch.tanh(self.linear_w_g(y) + self.linear_u_g(r*x))  #Note elementwise multiplication of r and x
@@ -139,12 +140,10 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
         # TODO DEBUG, Why dec_inp2 used in the comment above?
         # TODO : Changed dec_inp2 to dec_inp
-        # dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
-        #                        attn_mask=dec_attn_mask,
-        #                        mems=mems, use_stable_version=self.use_stable_version)
-        dec_inp2 = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
-                               attn_mask=dec_attn_mask,
-                               mems=mems, use_stable_version=self.use_stable_version)
+        dec_inp2 = self.layer_norm1(dec_inp)
+        dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
+                                attn_mask=dec_attn_mask,
+                                mems=mems, use_stable_version=self.use_stable_version)
 
         #NOTE: In stable transformer they apply Relu before the layernorm/gate (in appendix C.3)
         if self.use_gate:
@@ -152,7 +151,7 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         else:
             dec_inp2 = dec_inp + F.relu(dec_inp2)
 
-        dec_inp3 = self.norm2(dec_inp2)
+        dec_inp3 = self.layer_norm2(dec_inp2)
 
         dec_inp3 = self.pos_ff(dec_inp3)
 
