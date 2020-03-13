@@ -114,6 +114,10 @@ parser.add_argument('--static-loss-scale', type=float, default=1,
 parser.add_argument('--dynamic-loss-scale', action='store_true',
                     help='Use dynamic loss scaling.  If supplied, this argument'
                     ' supersedes --static-loss-scale.')
+parser.add_argument('--max_step', type=int, default=100000,
+                    help='upper epoch limit')
+parser.add_argument('--eta_min', type=float, default=0.0,
+                    help='min learning rate for cosine scheduler')
 # yapf: enable
 
 
@@ -194,7 +198,7 @@ def act(
                 with torch.no_grad():
                     #HERE IS WHY B=1, T=1
                     # print('Env output shape: ',env_output['frame'].shape)
-                    print('ACTING')
+                    # print('ACTING')
                     agent_output, agent_state, mems = model(env_output, agent_state, mems)
 
                 timings.time("model")
@@ -275,7 +279,7 @@ def learn(
         """
         # print('RUNNING MAIN MODEL')
         # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
-        print('batch size : ', batch['frame'].size())
+        # print('batch size : ', batch['frame'].size())
 
         learner_outputs, unused_state, unused_mems = model(batch, initial_agent_state, mems=None)
 
@@ -494,7 +498,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         print('WARNING: apex not installed, ignoring --fp16 option')
         flags.fp16 = False
 
-    if flags.cuda and flags.fp16:
+    if not flags.disable_cuda and flags.fp16:
         # If args.dynamic_loss_scale is False, static_loss_scale will be used.
         # If args.dynamic_loss_scale is True, it will take precedence over static_loss_scale.
         optimizer = FP16_Optimizer(optimizer,
@@ -536,11 +540,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
-            print('Before Learn')
+            # print('Before Learn')
             stats = learn(
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
             )
-            print('After Learn')
+            # print('After Learn')
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
@@ -819,10 +823,10 @@ class AtariNet(nn.Module):
         self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size // 8,
                                      d_model=core_output_size, d_inner=2048,
                                     dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=1, ext_len=0,
-                                     use_stable_version=False, use_gate=False)
+                                     use_stable_version=True, use_gate=False)
         self.core.apply(weights_init)
 
-
+        # TODO : Check if these layers need to be initialized
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
 
@@ -927,7 +931,7 @@ class AtariNet(nn.Module):
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
 
-        print('policy logits : {} and T : {} B : {} action : {}'.format(policy_logits.shape, T, B, action.shape))
+        # print('policy logits : {} and T : {} B : {} action : {}'.format(policy_logits.shape, T, B, action.shape))
         action = action.view(T, B)
 
         return (

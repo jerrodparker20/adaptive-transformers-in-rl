@@ -437,7 +437,7 @@ class MemTransformerLM(nn.Module):
 
         if mems is not None:
             mlen = mems[0].size(0)
-            print('HERE: mlen: {}, len mems: {}, mems[0] shape: {}'.format(mlen, len(mems),mems[0].shape))
+            # print('HERE: mlen: {}, len mems: {}, mems[0] shape: {}'.format(mlen, len(mems),mems[0].shape))
         else:
             mlen = 0
         # mlen = mems[0].size(0) if mems is not None else 0
@@ -495,7 +495,7 @@ class MemTransformerLM(nn.Module):
         # them together.
 
         if not mems:
-            print('INITIALIZED MEMS')
+            # print('INITIALIZED MEMS')
             mems = self.init_mems()
 
         # tgt_len = target.size(0)
