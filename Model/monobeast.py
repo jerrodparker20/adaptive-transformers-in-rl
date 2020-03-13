@@ -151,8 +151,8 @@ def act(
         agent_state = model.initial_state(batch_size=1)
 
         # TODO DEBUG : negative probability coming up here
-        print('Env output shape 1: ',env_output['frame'].shape)
-        print('AGENT STATE: ', agent_state)
+        # print('Env output shape 1: ',env_output['frame'].shape)
+        # print('AGENT STATE: ', agent_state)
         agent_output, unused_state = model(env_output, agent_state)
         while True:
             index = free_queue.get()
@@ -173,7 +173,7 @@ def act(
 
                 with torch.no_grad():
                     #HERE IS WHY B=1, T=1
-                    print('Env output shape: ',env_output['frame'].shape)
+                    # print('Env output shape: ',env_output['frame'].shape)
                     agent_output, agent_state = model(env_output, agent_state)
 
                 timings.time("model")
@@ -198,7 +198,7 @@ def act(
     except Exception as e:
         logging.error("Exception in worker process %i", actor_index)
         traceback.print_exc()
-        print()
+        # print()
         raise e
 
 
@@ -252,9 +252,10 @@ def learn(
         Update the parameters of the central learner,
         copy the parameters of the central learner back to the actors
         """
-        print('RUNNING MAIN MODEL')
-        print('MODEL OUTOUT: ', model(batch, initial_agent_state))
-        exit()
+        # print('RUNNING MAIN MODEL')
+        # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
+        print('batch size : ', batch['frame'].size())
+
         learner_outputs, unused_state = model(batch, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
@@ -385,6 +386,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
+    # actor = act(flags,
+    #             0,
+    #             free_queue,
+    #             full_queue,
+    #             model,
+    #             buffers,
+    #             initial_agent_state_buffers)
     for i in range(flags.num_actors):
         actor = ctx.Process(
             target=act,
@@ -445,9 +453,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
+            print('Before Learn')
             stats = learn(
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
             )
+            print('After Learn')
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
@@ -605,7 +615,7 @@ def weights_init(m):
         if hasattr(m, 'bias') and m.bias is not None:
             init_bias(m.bias)
     elif classname.find('TransformerLM') != -1:
-        print('FOUND TRNASFORMER LM')
+        # print('FOUND TRNASFORMER LM')
         if hasattr(m, 'r_emb'):
             init_weight(m.r_emb)
         if hasattr(m, 'r_w_bias'):
@@ -743,8 +753,8 @@ class AtariNet(nn.Module):
         ).float()
 
         #what's happening here?
-        print('REWARD SHAPE: ', inputs['reward'].shape)
-        print('X shape: ', x.shape)
+        # print('REWARD SHAPE: ', inputs['reward'].shape)
+        # print('X shape: ', x.shape)
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
         ###############################################################transformer
@@ -767,8 +777,8 @@ class AtariNet(nn.Module):
         # TODO DEBUG : This line is giving all nans XD
         core_output = self.core(core_input)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
-        print('CORE OUTPUT: ',core_output[0,:10])
-        print('Core output shpae: ',core_output.shape)
+        # print('CORE OUTPUT: ',core_output[0,:10])
+        # print('Core output shpae: ',core_output.shape)
         # TODO : The current memory is put as None since I've instantiated TransformerLM with
         #  mem_len = 0 above
 
@@ -791,17 +801,23 @@ class AtariNet(nn.Module):
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
-        print('POLICY SHAPE: ',policy_logits.shape)
+        # print('POLICY SHAPE: ',policy_logits.shape)
+        policy_logits = policy_logits.reshape(T*B, self.num_actions)
+        # print('TMP : {} Original : {}'.format(policy_logits_tmp[:3, :], policy_logits[:3, :3, :]))
         if self.training:
-            # Sample from multinomial distribution for exploration
+            # Sample from multinomial distribution for explorationx
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
             action = torch.argmax(policy_logits, dim=1)
 
         #IS THIS NECESSARY? If yes then switch to transpose
+        # print('')
+        # print('policy logits : {} and T : {} B : {}'.format(policy_logits.shape, T, B))
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
+
+        print('policy logits : {} and T : {} B : {} action : {}'.format(policy_logits.shape, T, B, action.shape))
         action = action.view(T, B)
 
         return (
