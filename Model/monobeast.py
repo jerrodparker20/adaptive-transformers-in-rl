@@ -335,22 +335,7 @@ def learn(
         else:
             nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-
-        # step-wise learning rate annealing
-        # TODO : How to perform annealing here exactly, we dont have access to the train_step !
-        train_step += 1
-        if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
-            # linear warmup stage
-            if train_step < flags.warmup_step:
-                # TODO : Sanity check this line
-                curr_lr = flags.lr * train_step / args.warmup_step
-                optimizer.param_groups[0]['lr'] = curr_lr
-            else:
-                if flags.scheduler == 'cosine':
-                    scheduler.step()
-        elif flags.scheduler == 'inv_sqrt':
-            scheduler.step()
-
+        # scheduler is being stepped in the lock of batch_and_learn itself
         # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
@@ -558,11 +543,25 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             print('After Learn')
             timings.time("learn")
             with lock:
+                # step-wise learning rate annealing
+                # TODO : How to perform annealing here exactly, we dont have access to the train_step !
+                if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
+                    # linear warmup stage
+                    if step < flags.warmup_step:
+                        curr_lr = flags.lr * step / flags.warmup_step
+                        optimizer.param_groups[0]['lr'] = curr_lr
+                    else:
+                        if flags.scheduler == 'cosine':
+                            scheduler.step()
+                elif flags.scheduler == 'inv_sqrt':
+                    scheduler.step()
+
                 to_log = dict(step=step)
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
                 print('updating step from {} to {}'.format(step, step+(T*B)))
                 step += T * B
+
 
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
