@@ -327,9 +327,28 @@ def learn(
 
         optimizer.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
+        if flags.fp16:
+            optimizer.clip_master_grads(flags.grad_norm_clipping)
+        else:
+            nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        scheduler.step()
+
+        # step-wise learning rate annealing
+        # TODO : How to perform annealing here exactly, we dont have access to the train_step !
+        train_step += 1
+        if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
+            # linear warmup stage
+            if train_step < flags.warmup_step:
+                # TODO : Sanity check this line
+                curr_lr = flags.lr * train_step / args.warmup_step
+                optimizer.param_groups[0]['lr'] = curr_lr
+            else:
+                if flags.scheduler == 'cosine':
+                    scheduler.step()
+        elif flags.scheduler == 'inv_sqrt':
+            scheduler.step()
+
+        # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
         return stats
@@ -590,6 +609,16 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
+            # TODO : We also should save the model if the loss is the best loss seen so far
+            # TODO : call checkpoint() here with some differen prefix
+            # if not best_val_loss or val_loss < best_val_loss:
+            #     if not args.debug:
+            #         with open(os.path.join(args.work_dir, 'model.pt'), 'wb') as f:
+            #             torch.save(model, f)
+            #         with open(os.path.join(args.work_dir, 'optimizer.pt'), 'wb') as f:
+            #             torch.save(optimizer.state_dict(), f)
+            #     best_val_loss = val_loss
+
             logging.info(
                 "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
                 step,
@@ -926,3 +955,13 @@ def main(flags):
 if __name__ == "__main__":
     flags = parser.parse_args()
     main(flags)
+
+
+# TODO : Should we have this functinality as well, to load the model if this is not a restart?
+# if args.restart:
+#     if os.path.exists(os.path.join(args.restart_dir, 'optimizer.pt')):
+#         with open(os.path.join(args.restart_dir, 'optimizer.pt'), 'rb') as f:
+#             opt_state_dict = torch.load(f)
+#             optimizer.load_state_dict(opt_state_dict)
+#     else:
+#         print('Optimizer was not saved. Start from scratch.')
