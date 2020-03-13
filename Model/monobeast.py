@@ -355,6 +355,45 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
     return buffers
 
 
+def get_optimizer(flags, parameters):
+    optimizer = None
+    if flags.optim.lower() == 'sgd':
+        optimizer = torch.optim.SGD(parameters, lr=flags.learning_rate, momentum=flags.momentum)
+    elif flags.optim.lower() == 'adam':
+        optimizer = torch.optim.Adam(parameters, lr=flags.learning_rate)
+    elif flags.optim.lower() == 'adagrad':
+        optimizer = torch.optim.Adagrad(parameters, lr=flags.learning_rate)
+    return optimizer
+
+
+def get_scheduler(flags, optimizer):
+    scheduler = None
+    if flags.scheduler == 'cosine':
+        # here we do not set eta_min to lr_min to be backward compatible
+        # because in previous versions eta_min is default to 0
+        # rather than the default value of lr_min 1e-6
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                         flags.max_step, eta_min=flags.eta_min)
+    elif flags.scheduler == 'inv_sqrt':
+        # originally used for Transformer (in Attention is all you need)
+        def lr_lambda(step):
+            # return a multiplier instead of a learning rate
+            if step == 0 and flags.warmup_step == 0:
+                return 1.
+            else:
+                return 1. / (step ** 0.5) if step > flags.warmup_step \
+                    else step / (flags.warmup_step ** 1.5)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+    elif flags.scheduler == 'dev_perf':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                         factor=flags.decay_rate, patience=flags.patience,
+                                                         min_lr=flags.lr_min)
+    elif flags.scheduler == 'constant':
+        pass
+    return scheduler
+
+
 def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     if flags.xpid is None:
         flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
@@ -431,19 +470,38 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     learner_model = Net(
         env.observation_space.shape, env.action_space.n).to(device=flags.device)
 
-    optimizer = torch.optim.RMSprop(
-        learner_model.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha,
-    )
+    optimizer = get_optimizer(flags, learner_model.parameters())
+    if optimizer is None:
+        # Use the default optimizer used in monobeast
+        optimizer = torch.optim.RMSprop(
+            learner_model.parameters(),
+            lr=flags.learning_rate,
+            momentum=flags.momentum,
+            eps=flags.epsilon,
+            alpha=flags.alpha,
+        )
+
+    try:
+        from apex.fp16_utils import FP16_Optimizer
+    except:
+        print('WARNING: apex not installed, ignoring --fp16 option')
+        flags.fp16 = False
+
+    if flags.cuda and flags.fp16:
+        # If args.dynamic_loss_scale is False, static_loss_scale will be used.
+        # If args.dynamic_loss_scale is True, it will take precedence over static_loss_scale.
+        optimizer = FP16_Optimizer(optimizer,
+                                   static_loss_scale=flags.static_loss_scale,
+                                   dynamic_loss_scale=flags.dynamic_loss_scale,
+                                   dynamic_loss_args={'init_scale': 2 ** 16})
 
     def lr_lambda(epoch):
         return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
 
-    # TODO :Check if this can be changed as well
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler = get_scheduler(flags, optimizer)
+    if scheduler is None:
+        # use the default scheduler as used in monobeast
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
     stat_keys = [
