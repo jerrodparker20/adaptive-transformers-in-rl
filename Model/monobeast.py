@@ -153,7 +153,8 @@ def act(
         # TODO DEBUG : negative probability coming up here
         # print('Env output shape 1: ',env_output['frame'].shape)
         # print('AGENT STATE: ', agent_state)
-        agent_output, unused_state = model(env_output, agent_state)
+
+        agent_output, unused_state, mems = model(env_output, agent_state, mems=None)
         while True:
             index = free_queue.get()
             if index is None:
@@ -168,13 +169,15 @@ def act(
                 initial_agent_state_buffers[index][i][...] = tensor
 
             # Do new rollout.
+            mems = None
             for t in range(flags.unroll_length):
                 timings.reset()
 
                 with torch.no_grad():
                     #HERE IS WHY B=1, T=1
                     # print('Env output shape: ',env_output['frame'].shape)
-                    agent_output, agent_state = model(env_output, agent_state)
+                    print('ACTING')
+                    agent_output, agent_state, mems = model(env_output, agent_state, mems)
 
                 timings.time("model")
 
@@ -256,7 +259,7 @@ def learn(
         # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
         print('batch size : ', batch['frame'].size())
 
-        learner_outputs, unused_state = model(batch, initial_agent_state)
+        learner_outputs, unused_state, unused_mems = model(batch, initial_agent_state, mems=None)
 
         # Take final value function slice for bootstrapping.
         bootstrap_value = learner_outputs["baseline"][-1]
@@ -556,10 +559,13 @@ def test(flags, num_episodes: int = 10):
     observation = env.initial()
     returns = []
 
+    mems = None
     while len(returns) < num_episodes:
         if flags.mode == "test_render":
             env.gym_env.render()
-        agent_outputs = model(observation)
+
+        # TODO: Check that this call to model is correct
+        agent_outputs, core_state, mems = model(observation, mems=mems)
         policy_outputs, _ = agent_outputs
         observation = env.step(policy_outputs["action"])
         if observation["done"].item():
@@ -708,7 +714,7 @@ class AtariNet(nn.Module):
         #                            dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
         self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size // 8,
                                      d_model=core_output_size, d_inner=2048,
-                                    dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0,
+                                    dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=1, ext_len=0,
                                      use_stable_version=False, use_gate=False)
         self.core.apply(weights_init)
 
@@ -725,7 +731,7 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=()):
+    def forward(self, inputs, core_state=(), mems=None):
 
         x = inputs["frame"]
         # TODO DEBUG : This T and B come out to be 1, 1 each due to the env_output which is being fed.
@@ -775,7 +781,7 @@ class AtariNet(nn.Module):
         # TODO : the memory has been put as None here, this will be changed in the upcoming codes
 
         # TODO DEBUG : This line is giving all nans XD
-        core_output = self.core(core_input)   # core_input is of shape (T, B, ...)
+        core_output, mems = self.core(core_input, mems)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
         # print('CORE OUTPUT: ',core_output[0,:10])
         # print('Core output shpae: ',core_output.shape)
@@ -822,7 +828,7 @@ class AtariNet(nn.Module):
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state,
+            core_state, mems
         )
 
 

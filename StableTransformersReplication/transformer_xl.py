@@ -326,7 +326,7 @@ class MemTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
                  div_val=1,
-                 tgt_len=None, ext_len=None, mem_len=None,
+                 tgt_len=None, ext_len=None, mem_len=1,
                  cutoffs=[], adapt_inp=False,
                  same_length=False, clamp_len=-1,
                  use_gate=True, use_stable_version=True):
@@ -410,7 +410,10 @@ class MemTransformerLM(nn.Module):
         with torch.no_grad():
             new_mems = []
             end_idx = mlen + max(0, qlen - 0 - self.ext_len) # ext_len looks to usually be 0 (in their experiments anyways
-            beg_idx = max(0, end_idx - self.mem_len)
+
+            # TODO: I have changed beg_idx to 0 since want to use all memory, may want to change
+            #       this once move to larger environments
+            beg_idx = 0 #max(0, end_idx - self.mem_len)
             for i in range(len(hids)):
 
                 cat = torch.cat([mems[i], hids[i]], dim=0)
@@ -430,9 +433,11 @@ class MemTransformerLM(nn.Module):
         # Changed, this next line already has the input from the embedding of monobeast.
         # So we dont need this line at all, we can replace it with the already computed output
         # obs_emb = self.state_emb(dec_inp)
+        #print('MEMS: ',mems)
 
         if mems is not None:
             mlen = mems[0].size(0)
+            print('HERE: mlen: {}, len mems: {}, mems[0] shape: {}'.format(mlen, len(mems),mems[0].shape))
         else:
             mlen = 0
         # mlen = mems[0].size(0) if mems is not None else 0
@@ -482,14 +487,16 @@ class MemTransformerLM(nn.Module):
     # TODO : Removed target from here as we just would give the transformer output
     #       without considering it as an autoregressive model
     # def forward(self, data, target, *mems):
-    def forward(self, data, *mems):
+    # TODO: Replaced *mems with mems, are there any problems because of this?
+    def forward(self, data, mems):
         # nn.DataParallel does not allow size(0) tensors to be broadcasted.
         # So, have to initialize size(0) mems inside the model forward.
         # Moreover, have to return new_mems to allow nn.DataParallel to piece
         # them together.
-        #print('DATA: shape: {}, firstbit: {}'.format(data.shape,data[0,0,:5]))
 
-        if not mems: mems = self.init_mems()
+        if not mems:
+            print('INITIALIZED MEMS')
+            mems = self.init_mems()
 
         # tgt_len = target.size(0)
         hidden, new_mems = self._forward(data, mems=mems)
@@ -512,7 +519,7 @@ class MemTransformerLM(nn.Module):
         #               monobeast.py, one will map it to num_actions, another to a value.
         #               What do you think?
         # return F.softmax(pred_hid)
-        return pred_hid
+        return pred_hid, new_mems
 
 
 if __name__ == '__main__':
