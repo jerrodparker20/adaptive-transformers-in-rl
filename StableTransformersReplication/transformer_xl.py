@@ -198,7 +198,11 @@ class RelMultiHeadAttn(nn.Module):
         self.pre_lnorm = pre_lnorm
 
     def _parallelogram_mask(self, h, w, left=False):
-        mask = torch.ones((h, w)).byte()
+        # UserWarning: masked_fill_ received a mask with dtype torch.uint8,
+        # this behavior is now deprecated,please use a mask with dtype torch.bool instead.
+        # changed .byte() to .bool()
+        # mask = torch.ones((h, w)).byte()
+        mask = torch.ones((h, w)).bool()
         m = min(h, w)
         mask[:m,:m] = torch.triu(mask[:m,:m])
         mask[-m:,-m:] = torch.tril(mask[-m:,-m:])
@@ -451,10 +455,12 @@ class MemTransformerLM(nn.Module):
             else:
                 mask_shift_len = qlen
             dec_attn_mask = (torch.triu(all_ones, 1+mlen)
-                    + torch.tril(all_ones, -mask_shift_len)).byte()[:, :, None] # -1
+                             + torch.tril(all_ones, -mask_shift_len)).bool()[:, :, None] # -1
+                            # changed to .bool() from .byte() due to Depreciation warning
         else:
             dec_attn_mask = torch.triu(
-                obs_emb.new_ones(qlen, klen), diagonal=1+mlen).byte()[:,:,None]
+                obs_emb.new_ones(qlen, klen), diagonal=1+mlen).bool()[:,:,None]
+                # changed to .bool() from .byte() due to Depreciation warning
 
         hids = []
         pos_seq = torch.arange(klen-1, -1, -1.0, device=obs_emb.device,
