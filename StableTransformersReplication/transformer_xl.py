@@ -137,6 +137,7 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
+        # TODO DEBUG, Why dec_inp2 used in the comment above?
         # TODO : Changed dec_inp2 to dec_inp
         # dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
         #                        attn_mask=dec_attn_mask,
@@ -321,6 +322,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         return attn_out
 
 
+# TODO : DEBUG, sanity check the memtransformerLM implementation with the one in the Stabilizing paper
 class MemTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
@@ -498,7 +500,12 @@ class MemTransformerLM(nn.Module):
         #       2 MLP which are learning the policy
         # pred_hid = hidden[-tgt_len:]
         #print("HIDDEN SHAPE: ", hidden.shape)
-        pred_hid = hidden[-1]
+        # TODO : DEBUG Removed the hidden[-1] since for the learner model this was coming out as (81, 4, 512),
+        #       and once you do hidden[-1] all you're returning is (1, 4, 512) which the policy_logit is not able
+        #       to reshape. We want predictions at all timesteps, and not just the last step. So pass all the 81 timestep
+        #       hidden status.
+        # pred_hid = hidden[-1]
+        pred_hid = hidden
         # TODO : Check if this should be -1 or the entire hidden itself?
 
         # TODO : Jerrod : NEED TO CHANGE THIS (ADD MLP that maps to correct # actions
