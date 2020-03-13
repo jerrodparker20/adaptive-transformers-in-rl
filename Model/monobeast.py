@@ -91,11 +91,29 @@ parser.add_argument("--learning_rate", default=0.00048,
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
 parser.add_argument("--momentum", default=0, type=float,
-                    help="RMSProp momentum.")
+                    help="momentum for SGD or RMSProp")
 parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+parser.add_argument('--optim', default='adam', type=str,
+                    choices=['adam', 'sgd', 'adagrad'],
+                    help='optimizer to use.')
+parser.add_argument('--scheduler', default='cosine', type=str,
+                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
+                    help='lr scheduler to use.')
+parser.add_argument('--warmup_step', type=int, default=0,
+                    help='upper epoch limit')
+parser.add_argument('--decay_rate', type=float, default=0.5,
+                    help='decay factor when ReduceLROnPlateau is used')
+parser.add_argument('--lr_min', type=float, default=0.0,
+                    help='minimum learning rate during annealing')
+parser.add_argument('--static-loss-scale', type=float, default=1,
+                    help='Static loss scale, positive power of 2 values can '
+                    'improve fp16 convergence.')
+parser.add_argument('--dynamic-loss-scale', action='store_true',
+                    help='Use dynamic loss scaling.  If supplied, this argument'
+                    ' supersedes --static-loss-scale.')
 # yapf: enable
 
 
@@ -312,9 +330,28 @@ def learn(
 
         optimizer.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
+        if flags.fp16:
+            optimizer.clip_master_grads(flags.grad_norm_clipping)
+        else:
+            nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
         optimizer.step()
-        scheduler.step()
+
+        # step-wise learning rate annealing
+        # TODO : How to perform annealing here exactly, we dont have access to the train_step !
+        train_step += 1
+        if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
+            # linear warmup stage
+            if train_step < flags.warmup_step:
+                # TODO : Sanity check this line
+                curr_lr = flags.lr * train_step / args.warmup_step
+                optimizer.param_groups[0]['lr'] = curr_lr
+            else:
+                if flags.scheduler == 'cosine':
+                    scheduler.step()
+        elif flags.scheduler == 'inv_sqrt':
+            scheduler.step()
+
+        # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
         return stats
@@ -338,6 +375,45 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         for key in buffers:
             buffers[key].append(torch.empty(**specs[key]).share_memory_())
     return buffers
+
+
+def get_optimizer(flags, parameters):
+    optimizer = None
+    if flags.optim.lower() == 'sgd':
+        optimizer = torch.optim.SGD(parameters, lr=flags.learning_rate, momentum=flags.momentum)
+    elif flags.optim.lower() == 'adam':
+        optimizer = torch.optim.Adam(parameters, lr=flags.learning_rate)
+    elif flags.optim.lower() == 'adagrad':
+        optimizer = torch.optim.Adagrad(parameters, lr=flags.learning_rate)
+    return optimizer
+
+
+def get_scheduler(flags, optimizer):
+    scheduler = None
+    if flags.scheduler == 'cosine':
+        # here we do not set eta_min to lr_min to be backward compatible
+        # because in previous versions eta_min is default to 0
+        # rather than the default value of lr_min 1e-6
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                         flags.max_step, eta_min=flags.eta_min)
+    elif flags.scheduler == 'inv_sqrt':
+        # originally used for Transformer (in Attention is all you need)
+        def lr_lambda(step):
+            # return a multiplier instead of a learning rate
+            if step == 0 and flags.warmup_step == 0:
+                return 1.
+            else:
+                return 1. / (step ** 0.5) if step > flags.warmup_step \
+                    else step / (flags.warmup_step ** 1.5)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+    elif flags.scheduler == 'dev_perf':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                         factor=flags.decay_rate, patience=flags.patience,
+                                                         min_lr=flags.lr_min)
+    elif flags.scheduler == 'constant':
+        pass
+    return scheduler
 
 
 def train(flags):  # pylint: disable=too-many-branches, too-many-statements
@@ -416,19 +492,38 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     learner_model = Net(
         env.observation_space.shape, env.action_space.n).to(device=flags.device)
 
-    optimizer = torch.optim.RMSprop(
-        learner_model.parameters(),
-        lr=flags.learning_rate,
-        momentum=flags.momentum,
-        eps=flags.epsilon,
-        alpha=flags.alpha,
-    )
+    optimizer = get_optimizer(flags, learner_model.parameters())
+    if optimizer is None:
+        # Use the default optimizer used in monobeast
+        optimizer = torch.optim.RMSprop(
+            learner_model.parameters(),
+            lr=flags.learning_rate,
+            momentum=flags.momentum,
+            eps=flags.epsilon,
+            alpha=flags.alpha,
+        )
+
+    try:
+        from apex.fp16_utils import FP16_Optimizer
+    except:
+        print('WARNING: apex not installed, ignoring --fp16 option')
+        flags.fp16 = False
+
+    if flags.cuda and flags.fp16:
+        # If args.dynamic_loss_scale is False, static_loss_scale will be used.
+        # If args.dynamic_loss_scale is True, it will take precedence over static_loss_scale.
+        optimizer = FP16_Optimizer(optimizer,
+                                   static_loss_scale=flags.static_loss_scale,
+                                   dynamic_loss_scale=flags.dynamic_loss_scale,
+                                   dynamic_loss_args={'init_scale': 2 ** 16})
 
     def lr_lambda(epoch):
         return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
 
-    # TODO :Check if this can be changed as well
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler = get_scheduler(flags, optimizer)
+    if scheduler is None:
+        # use the default scheduler as used in monobeast
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     logger = logging.getLogger("logfile")
     stat_keys = [
@@ -517,6 +612,16 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
+            # TODO : We also should save the model if the loss is the best loss seen so far
+            # TODO : call checkpoint() here with some differen prefix
+            # if not best_val_loss or val_loss < best_val_loss:
+            #     if not args.debug:
+            #         with open(os.path.join(args.work_dir, 'model.pt'), 'wb') as f:
+            #             torch.save(model, f)
+            #         with open(os.path.join(args.work_dir, 'optimizer.pt'), 'wb') as f:
+            #             torch.save(optimizer.state_dict(), f)
+            #     best_val_loss = val_loss
+
             logging.info(
                 "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
                 step,
@@ -856,3 +961,13 @@ def main(flags):
 if __name__ == "__main__":
     flags = parser.parse_args()
     main(flags)
+
+
+# TODO : Should we have this functinality as well, to load the model if this is not a restart?
+# if args.restart:
+#     if os.path.exists(os.path.join(args.restart_dir, 'optimizer.pt')):
+#         with open(os.path.join(args.restart_dir, 'optimizer.pt'), 'rb') as f:
+#             opt_state_dict = torch.load(f)
+#             optimizer.load_state_dict(opt_state_dict)
+#     else:
+#         print('Optimizer was not saved. Start from scratch.')
