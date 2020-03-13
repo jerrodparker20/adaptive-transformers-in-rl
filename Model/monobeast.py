@@ -91,11 +91,29 @@ parser.add_argument("--learning_rate", default=0.00048,
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
 parser.add_argument("--momentum", default=0, type=float,
-                    help="RMSProp momentum.")
+                    help="momentum for SGD or RMSProp")
 parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+parser.add_argument('--optim', default='adam', type=str,
+                    choices=['adam', 'sgd', 'adagrad'],
+                    help='optimizer to use.')
+parser.add_argument('--scheduler', default='cosine', type=str,
+                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
+                    help='lr scheduler to use.')
+parser.add_argument('--warmup_step', type=int, default=0,
+                    help='upper epoch limit')
+parser.add_argument('--decay_rate', type=float, default=0.5,
+                    help='decay factor when ReduceLROnPlateau is used')
+parser.add_argument('--lr_min', type=float, default=0.0,
+                    help='minimum learning rate during annealing')
+parser.add_argument('--static-loss-scale', type=float, default=1,
+                    help='Static loss scale, positive power of 2 values can '
+                    'improve fp16 convergence.')
+parser.add_argument('--dynamic-loss-scale', action='store_true',
+                    help='Use dynamic loss scaling.  If supplied, this argument'
+                    ' supersedes --static-loss-scale.')
 # yapf: enable
 
 
