@@ -35,14 +35,20 @@ class AdaptiveMask(nn.Module):
         nn.Module.__init__(self)
         self._max_size = max_size
         self._ramp_size = ramp_size
+        # this is the z from the paper. Multiple z will be learnt as per the shape given
         self.current_val = nn.Parameter(torch.zeros(*shape) + init_val)
         mask_template = torch.linspace(1 - max_size, 0, steps=max_size)
+        # If you have parameters in your model, which should be saved and restored in the state_dict,
+        # but not trained by the optimizer, you should register them as buffers.
+        # Buffers won’t be returned in model.parameters(), so that the optimizer won’t have a change to update them.
         self.register_buffer('mask_template', mask_template)
 
     def forward(self, x):
+        # this function applies mask to the x.
+        # The current_val is a proportion of self._max_size so its multiplied # TODO : Find out why the self.mask_template is an addition
         mask = self.mask_template + self.current_val * self._max_size
         mask = mask / self._ramp_size + 1
-        mask = mask.clamp(0, 1)
+        mask = mask.clamp(0, 1)     # this is the equation of mz(x) from the paper
         if x.size(-1) < self._max_size:
             # the input could have been trimmed beforehand to save computation
             mask = mask[:, :, -x.size(-1):]
@@ -114,8 +120,11 @@ class AdaptiveSpan(nn.Module):
 
     def trim_memory(self, query, key, value, key_pe):
         """trim out unnecessary memory beforehand to reduce computation"""
+        # the dimension for query is (batch, k, hidden) where k is the no. of queries
+        # the dimension for key is (batch, seq_len, hidden) where seq_len is the number of sequences to attend
+        # to without masking
         trim_len = self.get_trim_len()
-        cache_size = key.size(1) - query.size(1)
+        cache_size = key.size(1) - query.size(1)        # TODO : Why subtract the query_size here?
         trim_len_cache = trim_len - (self._max_span - cache_size)
         if trim_len_cache > 0:
             key = key[:, trim_len_cache:, :]
