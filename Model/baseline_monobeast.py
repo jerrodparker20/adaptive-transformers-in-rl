@@ -22,6 +22,7 @@ import time
 import timeit
 import traceback
 import typing
+import queue
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
@@ -125,8 +126,8 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 def act(
     flags,
     actor_index: int,
-    free_queue: mp.SimpleQueue,
-    full_queue: mp.SimpleQueue,
+    free_queue: queue.Queue,
+    full_queue: queue.Queue,
     model: torch.nn.Module,
     buffers: Buffers,
     initial_agent_state_buffers,
@@ -143,7 +144,7 @@ def act(
         agent_state = model.initial_state(batch_size=1)
         agent_output, unused_state = model(env_output, agent_state)
         while True:
-            index = free_queue.get()
+            index = free_queue.get(False)
             if index is None:
                 break
 
@@ -191,8 +192,8 @@ def act(
 
 def get_batch(
     flags,
-    free_queue: mp.SimpleQueue,
-    full_queue: mp.SimpleQueue,
+    free_queue: queue.Queue,
+    full_queue: queue.Queue,
     buffers: Buffers,
     initial_agent_state_buffers,
     timings
@@ -200,7 +201,7 @@ def get_batch(
 ):
     # with lock:
     timings.time("lock")
-    indices = [full_queue.get() for _ in range(flags.batch_size)]
+    indices = [full_queue.get(False) for _ in range(flags.batch_size)]
     timings.time("dequeue")
     batch = {
         key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers
@@ -515,8 +516,11 @@ for _ in range(flags.num_buffers):
 
 actor_processes = []
 ctx = mp.get_context("fork")
-free_queue = ctx.SimpleQueue()
-full_queue = ctx.SimpleQueue()
+# free_queue = ctx.SimpleQueue()
+# full_queue = ctx.SimpleQueue()
+free_queue = queue.Queue()
+full_queue = queue.Queue()
+
 
 for i in range(flags.num_actors):
     actor = ctx.Process(
