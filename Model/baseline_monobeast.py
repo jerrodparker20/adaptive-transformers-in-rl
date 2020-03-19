@@ -144,8 +144,11 @@ def act(
         agent_state = model.initial_state(batch_size=1)
         agent_output, unused_state = model(env_output, agent_state)
         while True:
-            index = free_queue.get(False)
-            if index is None:
+            try:
+                index = free_queue.get(False)
+            except Exception as e:
+                # if index is None:
+                print('actor raised exception maybe due to free_queeue',e)
                 break
 
             # Write old rollout end.
@@ -515,28 +518,38 @@ for _ in range(flags.num_buffers):
     initial_agent_state_buffers.append(state)
 
 actor_processes = []
-ctx = mp.get_context("fork")
+# ctx = mp.get_context("fork")
 # free_queue = ctx.SimpleQueue()
 # full_queue = ctx.SimpleQueue()
 free_queue = queue.Queue()
 full_queue = queue.Queue()
 
-
-for i in range(flags.num_actors):
-    actor = ctx.Process(
-        target=act,
-        args=(
+actor = act(
             flags,
-            i,
+            0,
             free_queue,
             full_queue,
             model,
             buffers,
             initial_agent_state_buffers,
-        ),
-    )
-    actor.start()
-    actor_processes.append(actor)
+        )
+actor_processes.append(actor)
+
+# for i in range(flags.num_actors):
+#     actor = ctx.Process(
+#         target=act,
+#         args=(
+#             flags,
+#             i,
+#             free_queue,
+#             full_queue,
+#             model,
+#             buffers,
+#             initial_agent_state_buffers,
+#         ),
+#     )
+#     actor.start()
+#     actor_processes.append(actor)
 
 learner_model = Net(
     env.observation_space.shape, env.action_space.n, flags.use_lstm
@@ -599,12 +612,14 @@ for m in range(flags.num_buffers):
     free_queue.put(m)
 
 threads = []
-for i in range(flags.num_learner_threads):
-    thread = threading.Thread(
-        target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,)
-    )
-    thread.start()
-    threads.append(thread)
+thread = batch_and_learn(0)
+threads.append(thread)
+# for i in range(flags.num_learner_threads):
+#     thread = threading.Thread(
+#         target=batch_and_learn, name="batch-and-learn-%d" % i, args=(i,)
+#     )
+#     thread.start()
+#     threads.append(thread)
 
 def checkpoint():
     if flags.disable_checkpoint:
@@ -652,14 +667,14 @@ except KeyboardInterrupt:
     pass
     # return  # Try joining actors then quit.
 else:
-    for thread in threads:
-        thread.join()
+    # for thread in threads:
+    #     thread.join()
     logging.info("Learning finished after %d steps.", step)
 finally:
     for _ in range(flags.num_actors):
         free_queue.put(None)
-    for actor in actor_processes:
-        actor.join(timeout=1)
+    # for actor in actor_processes:
+    #     actor.join(timeout=1)
 
 checkpoint()
 plogger.close()
