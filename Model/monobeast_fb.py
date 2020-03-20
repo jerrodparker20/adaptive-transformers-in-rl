@@ -67,6 +67,7 @@ parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
+parser.add_argument("--lstm_layers", default=1, type=int)
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.0006,
@@ -347,7 +348,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         flags.device = torch.device("cpu")
     env = create_env(flags)
 
-    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm, flags.init_method)
+    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm,
+                flags.init_method, flags.lstm_layers)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
     model.share_memory()
@@ -382,7 +384,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor_processes.append(actor)
 
     learner_model = Net(
-        env.observation_space.shape, env.action_space.n, flags.use_lstm, flags.init_method
+        env.observation_space.shape, env.action_space.n, flags.use_lstm,
+        flags.init_method, flags.lstm_layers
     ).to(device=flags.device)
 
     optimizer = torch.optim.RMSprop(
@@ -517,7 +520,8 @@ def test(flags, num_episodes: int = 10):
 
     gym_env = create_env(flags)
     env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n, flags.use_lstm)
+    model = Net(gym_env.observation_space.shape, gym_env.action_space.n,
+                flags.use_lstm, None, flags.lstm_layers)
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -545,7 +549,8 @@ def test(flags, num_episodes: int = 10):
 
 
 class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions, use_lstm=False, init_method=None):
+    def __init__(self, observation_shape, num_actions, use_lstm=False,
+                 init_method=None, lstm_layers=1):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
@@ -571,7 +576,7 @@ class AtariNet(nn.Module):
 
         self.use_lstm = use_lstm
         if use_lstm:
-            self.core = nn.LSTM(core_output_size, core_output_size, 2)
+            self.core = nn.LSTM(core_output_size, core_output_size, lstm_layers)
             if not init_method:
                 self.lstm_init(init_method)
 
