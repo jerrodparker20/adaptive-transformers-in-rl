@@ -1,16 +1,5 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Using residual in the vision network
+# original credit Facebook
 
 import argparse
 import logging
@@ -24,17 +13,23 @@ import typing
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
-import sys
-import os
-#assuming we run this run this from the Model directory
-sys.path.insert(0,os.getcwd()+'/..')
-
 import torch
 from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
+
+import sys
+sys.path.insert(0,os.getcwd()+'/..')
+
 from Model.core import environment, file_writer, prof, vtrace
 from Model import atari_wrappers
+
+# from torchbeast import atari_wrappers
+# from torchbeast.core import environment
+# from torchbeast.core import file_writer
+# from torchbeast.core import prof
+# from torchbeast.core import vtrace
+
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
@@ -50,7 +45,7 @@ parser.add_argument("--xpid", default=None,
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
-parser.add_argument("--savedir", default="~/logs/torchbeast",
+parser.add_argument("--savedir", default="./logs_using_lstm/torchbeast",
                     help="Root dir where experiment data will be saved.")
 parser.add_argument("--num_actors", default=4, type=int, metavar="N",
                     help="Number of actors (default: 4).")
@@ -66,7 +61,7 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--use_lstm", action="store_true", default=False,
+parser.add_argument("--use_lstm", action="store_true",
                     help="Use LSTM in agent model.")
 
 # Loss settings.
@@ -126,13 +121,13 @@ def compute_policy_gradient_loss(logits, actions, advantages):
 
 
 def act(
-    flags,
-    actor_index: int,
-    free_queue: mp.SimpleQueue,
-    full_queue: mp.SimpleQueue,
-    model: torch.nn.Module,
-    buffers: Buffers,
-    initial_agent_state_buffers,
+        flags,
+        actor_index: int,
+        free_queue: mp.SimpleQueue,
+        full_queue: mp.SimpleQueue,
+        model: torch.nn.Module,
+        buffers: Buffers,
+        initial_agent_state_buffers,
 ):
     try:
         logging.info("Actor %i started.", actor_index)
@@ -192,13 +187,13 @@ def act(
 
 
 def get_batch(
-    flags,
-    free_queue: mp.SimpleQueue,
-    full_queue: mp.SimpleQueue,
-    buffers: Buffers,
-    initial_agent_state_buffers,
-    timings,
-    lock=threading.Lock(),
+        flags,
+        free_queue: mp.SimpleQueue,
+        full_queue: mp.SimpleQueue,
+        buffers: Buffers,
+        initial_agent_state_buffers,
+        timings,
+        lock=threading.Lock(),
 ):
     with lock:
         timings.time("lock")
@@ -224,17 +219,23 @@ def get_batch(
 
 
 def learn(
-    flags,
-    actor_model,
-    model,
-    batch,
-    initial_agent_state,
-    optimizer,
-    scheduler,
-    lock=threading.Lock(),  # noqa: B008
+        flags,
+        actor_model,
+        model,
+        batch,
+        initial_agent_state,
+        optimizer,
+        scheduler,
+        lock=threading.Lock(),  # noqa: B008
 ):
     """Performs a learning (optimization) step."""
     with lock:
+        """
+        put a lock on the central learner,
+        send the trajectories to it.
+        Update the parameters of the central learner,
+        copy the parameters of the central learner back to the actors
+        """
         learner_outputs, unused_state = model(batch, initial_agent_state)
 
         # Take final value function slice for bootstrapping.
@@ -346,6 +347,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     env = create_env(flags)
 
+    """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
     model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
@@ -380,6 +382,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor.start()
         actor_processes.append(actor)
 
+    """learner_model is the central learner, which takes in the experiences and updates itself"""
     learner_model = Net(
         env.observation_space.shape, env.action_space.n, flags.use_lstm
     ).to(device=flags.device)
@@ -476,7 +479,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             sps = (step - start_step) / (timer() - start_time)
             if stats.get("episode_returns", None):
                 mean_return = (
-                    "Return per episode: %.1f. " % stats["mean_episode_return"]
+                        "Return per episode: %.1f. " % stats["mean_episode_return"]
                 )
             else:
                 mean_return = ""
@@ -548,22 +551,65 @@ class AtariNet(nn.Module):
         self.observation_shape = observation_shape
         self.num_actions = num_actions
 
-        # Feature extraction.
-        self.conv1 = nn.Conv2d(
-            in_channels=self.observation_shape[0],
-            out_channels=32,
-            kernel_size=8,
-            stride=4,
-        )
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.feat_convs = []
+        self.resnet1 = []
+        self.resnet2 = []
+
+        self.convs = []
+        input_channels = self.observation_shape[0]
+        for num_ch in [16, 32, 32]:
+            feats_convs = []
+            feats_convs.append(
+                nn.Conv2d(
+                    in_channels=input_channels,
+                    out_channels=num_ch,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                )
+            )
+            feats_convs.append(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            self.feat_convs.append(nn.Sequential(*feats_convs))
+
+            input_channels = num_ch
+
+            for i in range(2):
+                resnet_block = []
+                resnet_block.append(nn.ReLU())
+                resnet_block.append(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=num_ch,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    )
+                )
+                resnet_block.append(nn.ReLU())
+                resnet_block.append(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=num_ch,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    )
+                )
+                if i == 0:
+                    self.resnet1.append(nn.Sequential(*resnet_block))
+                else:
+                    self.resnet2.append(nn.Sequential(*resnet_block))
+
+        self.feat_convs = nn.ModuleList(self.feat_convs)
+        self.resnet1 = nn.ModuleList(self.resnet1)
+        self.resnet2 = nn.ModuleList(self.resnet2)
 
         # Fully connected layer.
-        self.fc = nn.Linear(3136, 512)
+        self.fc = nn.Linear(3872, 256)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
-
+        ###############################################################transformer
         self.use_lstm = use_lstm
         if use_lstm:
             self.core = nn.LSTM(core_output_size, core_output_size, 2)
@@ -580,13 +626,23 @@ class AtariNet(nn.Module):
         )
 
     def forward(self, inputs, core_state=()):
-        x = inputs["frame"]  # [T, B, C, H, W].
+
+        x = inputs["frame"]
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
+
+        res_input = None
+        for i, fconv in enumerate(self.feat_convs):
+            x = fconv(x)
+            res_input = x
+            x = self.resnet1[i](x)
+            x += res_input
+            res_input = x
+            x = self.resnet2[i](x)
+            x += res_input
+
+        x = F.relu(x)
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
@@ -595,7 +651,7 @@ class AtariNet(nn.Module):
         ).float()
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-
+        ###############################################################transformer
         if self.use_lstm:
             core_input = core_input.view(T, B, -1)
             core_output_list = []
@@ -617,6 +673,7 @@ class AtariNet(nn.Module):
         baseline = self.baseline(core_output)
 
         if self.training:
+            # print('core input : {} policy logits : {} T : {} B : {}'.format(core_output.shape, policy_logits.shape, T, B))
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
@@ -655,5 +712,5 @@ def main(flags):
 
 if __name__ == "__main__":
     flags = parser.parse_args()
-    print('USING LSTM: ', flags.use_lstm)
+    print('Using LSTM : ', flags.use_lstm)
     main(flags)

@@ -428,7 +428,7 @@ class MemTransformerLM(nn.Module):
     # def _forward(self, dec_inp, obs_emb, mems=None):
     # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
     # that of dec_input, which is unrolled length = query length and batch_size
-    # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast.py
+    # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
     def _forward(self, obs_emb, mems=None):
 
         qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
@@ -522,7 +522,7 @@ class MemTransformerLM(nn.Module):
 
         # TODO : Jerrod : NEED TO CHANGE THIS (ADD MLP that maps to correct # actions
         # TODO : Shakti : I dont think so since this output will be succeeded by 2 MLPs in
-        #               monobeast.py, one will map it to num_actions, another to a value.
+        #               monobeast_test.py, one will map it to num_actions, another to a value.
         #               What do you think?
         # return F.softmax(pred_hid)
         return pred_hid, new_mems
