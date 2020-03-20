@@ -90,6 +90,8 @@ parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+parser.add_argument("--weight_decay", default=0.0,
+                    type=float)
 # yapf: enable
 
 
@@ -388,6 +390,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         momentum=flags.momentum,
         eps=flags.epsilon,
         alpha=flags.alpha,
+        weight_decay=flags.weight_decay
     )
 
     def lr_lambda(epoch):
@@ -557,7 +560,10 @@ class AtariNet(nn.Module):
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
 
         # Fully connected layer.
-        self.fc = nn.Linear(3136, 512)
+        if use_lstm:
+            self.fc = nn.Linear(3136, 256)
+        else:
+            self.fc = nn.Linear(3136, 512)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1

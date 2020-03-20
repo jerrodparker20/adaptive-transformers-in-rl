@@ -478,6 +478,7 @@ class MemTransformerLM(nn.Module):
         for i, layer in enumerate(self.layers):
             #print('HIDDEN iter: {}, output: {}'.format(i, core_out[-1,0, :10]))
 
+            # TODO : The memory should be the same hidden layer's state of the previous T timesteps
             mems_i = None if mems is None else mems[i]
             core_out = layer(core_out, pos_emb, self.r_w_bias,
                     self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)

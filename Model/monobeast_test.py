@@ -889,7 +889,7 @@ class AtariNet(nn.Module):
         #       directly to the transformer. Check dimensions here
         # TODO : the memory has been put as None here, this will be changed in the upcoming codes
 
-        # TODO DEBUG : This line is giving all nans XD
+        """TODO : Need to include a for loop here after core_input.unbind()"""
         core_output, mems = self.core(core_input, mems)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
         # print('CORE OUTPUT: ',core_output[0,:10])
