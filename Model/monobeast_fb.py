@@ -66,7 +66,7 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--use_lstm", action="store_true",
+parser.add_argument("--use_lstm", default=True, action="store_true",
                     help="Use LSTM in agent model.")
 
 # Loss settings.
@@ -655,4 +655,5 @@ def main(flags):
 
 if __name__ == "__main__":
     flags = parser.parse_args()
+    print('USING LSTM: ', flags.use_lstm)
     main(flags)
