@@ -92,6 +92,7 @@ parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
 parser.add_argument("--weight_decay", default=0.0,
                     type=float)
+parser.add_argument("--init_method", default=None, type=str)
 # yapf: enable
 
 
@@ -346,7 +347,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         flags.device = torch.device("cpu")
     env = create_env(flags)
 
-    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
+    model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm, flags.init_method)
     buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
 
     model.share_memory()
@@ -381,7 +382,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor_processes.append(actor)
 
     learner_model = Net(
-        env.observation_space.shape, env.action_space.n, flags.use_lstm
+        env.observation_space.shape, env.action_space.n, flags.use_lstm, flags.init_method
     ).to(device=flags.device)
 
     optimizer = torch.optim.RMSprop(
@@ -544,7 +545,7 @@ def test(flags, num_episodes: int = 10):
 
 
 class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions, use_lstm=False):
+    def __init__(self, observation_shape, num_actions, use_lstm=False, init_method=None):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
@@ -571,9 +572,19 @@ class AtariNet(nn.Module):
         self.use_lstm = use_lstm
         if use_lstm:
             self.core = nn.LSTM(core_output_size, core_output_size, 2)
+            if not init_method:
+                self.lstm_init(init_method)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
+
+    def lstm_init(self, method):
+        for param in self.core.parameters():
+            if param.dim() > 1:
+                if method == 'xavier_uniform':
+                    nn.init.xavier_uniform_(param)
+                elif method == 'xavier_normal':
+                    nn.init.xavier_normal_(param)
 
     def initial_state(self, batch_size):
         if not self.use_lstm:
