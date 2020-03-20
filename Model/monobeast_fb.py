@@ -66,7 +66,7 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--use_lstm", default=True, action="store_true",
+parser.add_argument("--use_lstm", default=False, type=bool,
                     help="Use LSTM in agent model.")
 
 # Loss settings.
