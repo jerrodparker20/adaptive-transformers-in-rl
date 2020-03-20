@@ -82,6 +82,8 @@ parser.add_argument("--reward_clipping", default="abs_one",
                     help="Reward clipping.")
 
 # Optimizer settings.
+parser.add_argument("--weight_decay", default=0.0,
+                    type=float)
 parser.add_argument("--learning_rate", default=0.00048,
                     type=float, metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
@@ -488,6 +490,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             momentum=flags.momentum,
             eps=flags.epsilon,
             alpha=flags.alpha,
+            weight_decay=flags.weight_decay
         )
 
     try:
