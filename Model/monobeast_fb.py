@@ -342,7 +342,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     else:
         logging.info("Not using CUDA.")
         flags.device = torch.device("cpu")
-    logging.info("Using LSTM : ", flags.use_lstm)
     env = create_env(flags)
 
     model = Net(env.observation_space.shape, env.action_space.n, flags.use_lstm)
@@ -654,4 +653,5 @@ def main(flags):
 
 if __name__ == "__main__":
     flags = parser.parse_args()
+    print("Using LSTM : ", flags.use_lstm)
     main(flags)
