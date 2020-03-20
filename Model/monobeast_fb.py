@@ -24,6 +24,11 @@ import typing
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
+import sys
+import os
+#assuming we run this run this from the Model directory
+sys.path.insert(0,os.getcwd()+'/..')
+
 import torch
 from torch import multiprocessing as mp
 from torch import nn
