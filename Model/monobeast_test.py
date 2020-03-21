@@ -875,8 +875,7 @@ class AtariNet(nn.Module):
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
-        
-        res_input = None
+
         for i, fconv in enumerate(self.feat_convs):
             x = fconv(x)
             res_input = x
@@ -887,7 +886,7 @@ class AtariNet(nn.Module):
             x += res_input
         
         x = F.relu(x)
-        x = x.view(T * B, -1)  #WHY FLATTEN HERE
+        x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
         one_hot_last_action = F.one_hot(
@@ -896,39 +895,31 @@ class AtariNet(nn.Module):
 
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-        ###############################################################transformer
-        # if self.use_lstm:
-        #print('CoreInput shape: ', core_input.shape)
 
-        #BE CAREFUL WITH THIS WAY OF RESHAPING (should transpose instead)
         core_input = core_input.view(T, B, -1)
-        core_output_list = []
-        notdone = (~inputs["done"]).float()
 
-        # TODO : We need to pass everything at once to the transformer, and not
-        #         iterate over each timestep. Check how this should be done here
+        #Need padding_mask to be qlenX(qlen+mlen)Xbatch_size and shouldn't have final
+        #column masked.
+        # TODO: This doesn't work if need to mask memory as well (right now we don't need to)
 
-        # TODO : seems like core_input does have all the timesteps into it since
-        #       an unbind is being called on it. It should be safe to pass core_input
-        #       directly to the transformer. Check dimensions here
-        # TODO : the memory has been put as None here, this will be changed in the upcoming codes
+        padding_mask = inputs['done'].unsqueeze(0)
+        if padding_mask.dim() > 2: #This only seems to not happen on first state ever in env.initialize()
+            #print('PADDING DIM:', padding_mask.shape)
+            padding_mask[:, 0, :] = True #TODO REMOVE THIS LINE
+            padding_mask[:,-1,:] = False #if last row is Done then don't want to mask
+            #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
+        if not padding_mask.any().item(): #In this case no need for padding_mask
+            padding_mask = None
 
-        """TODO : Need to include a for loop here after core_input.unbind()"""
-        core_output, mems = self.core(core_input, mems)   # core_input is of shape (T, B, ...)
+        core_output, mems = self.core(core_input, mems, padding_mask=padding_mask)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
-        # print('CORE OUTPUT: ',core_output[0,:10])
-        # print('Core output shpae: ',core_output.shape)
-        # TODO : The current memory is put as None since I've instantiated TransformerLM with
-        #  mem_len = 0 above
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
-        # print('POLICY SHAPE: ',policy_logits.shape)
         policy_logits = policy_logits.reshape(T*B, self.num_actions)
-        # print('TMP : {} Original : {}'.format(policy_logits_tmp[:3, :], policy_logits[:3, :3, :]))
         if self.training:
-            # Sample from multinomial distribution for explorationx
+            # Sample from multinomial distribution for exploration
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
@@ -937,7 +928,6 @@ class AtariNet(nn.Module):
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
 
-        # print('policy logits : {} and T : {} B : {} action : {}'.format(policy_logits.shape, T, B, action.shape))
         action = action.view(T, B)
 
         return (
