@@ -230,7 +230,7 @@ def act(
                 for key in agent_output:
                     buffers[key][index][flags.unroll_length - t:] = buffers[key][index][:t+1]
                 # update the dones with True for beginning positions
-                buffers['done'][index][:t+1] = torch.Tensor([1]).repeat(t+1)
+                buffers['done'][index][:t+1] = torch.tensor([True]).repeat(t+1)
 
             full_queue.put(index)
 
