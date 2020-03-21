@@ -192,6 +192,8 @@ def act(
             for t in range(flags.unroll_length):
                 timings.reset()
 
+                if env_output['done'].item():
+                    mems = None
                 with torch.no_grad():
                     #HERE IS WHY B=1, T=1
                     # print('Env output shape: ',env_output['frame'].shape)
@@ -278,6 +280,12 @@ def learn(
         # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
         # print('batch size : ', batch['frame'].size())
 
+        # TODO Next Step: think about chopping the sequences up for attending to long sequences
+        # TODO Next Step: make the actors put only one sequence in one rollout. And then mask the remaining rollout
+        #       positions. And then change the triu in line 461 in TXL
+        # Here entire 81 length sequence is considered as a query, and is autoregressively being attended to the
+        # keys and values of length 81. This sequence length when becomes very large is when we'll need memory to
+        # kick in
         learner_outputs, unused_state, unused_mems = model(batch, initial_agent_state, mems=None)
 
         # Take final value function slice for bootstrapping.
@@ -307,6 +315,8 @@ def learn(
             bootstrap_value=bootstrap_value,
         )
 
+        # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
+        #                   to do this efficiently
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["policy_logits"],
             batch["action"],
