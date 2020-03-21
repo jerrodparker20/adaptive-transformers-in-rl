@@ -94,10 +94,10 @@ parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
-parser.add_argument('--optim', default='adam', type=str,
-                    choices=['adam', 'sgd', 'adagrad'],
+parser.add_argument('--optim', default='RMSProp', type=str,
+                    choices=['adam', 'sgd', 'adagrad, RMSProp'],
                     help='optimizer to use.')
-parser.add_argument('--scheduler', default='cosine', type=str,
+parser.add_argument('--scheduler', default='torchLR', type=str,
                     choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
                     help='lr scheduler to use.')
 parser.add_argument('--warmup_step', type=int, default=0,
