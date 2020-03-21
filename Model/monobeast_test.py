@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import argparse
 import logging
-import os
 import pprint
 import threading
 import time
@@ -23,9 +24,6 @@ import traceback
 import typing
 from StableTransformersReplication.transformer_xl import MemTransformerLM
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
-
-import sys
-sys.path.insert(0,os.getcwd()+'/..')
 
 import torch
 from torch import multiprocessing as mp
