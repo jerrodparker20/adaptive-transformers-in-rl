@@ -566,7 +566,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 to_log = dict(step=step)
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
-                print('updating step from {} to {}'.format(step, step+(T*B)))
+                # print('updating step from {} to {}'.format(step, step+(T*B)))
                 step += T * B
 
 
@@ -805,9 +805,8 @@ class AtariNet(nn.Module):
 
 
         # Fully connected layer.
-        # Changed the FC output to match the transformer input of 512 dimensions
-
-        self.fc = nn.Linear(3872, 256)
+        # Changed the FC output to match the transformer output which should be divisible by number of heads
+        self.fc = nn.Linear(3872, 256-num_actions-1)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1

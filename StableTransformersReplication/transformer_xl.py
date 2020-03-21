@@ -430,7 +430,7 @@ class MemTransformerLM(nn.Module):
     # that of dec_input, which is unrolled length = query length and batch_size
     # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
     def _forward(self, obs_emb, mems=None):
-
+        # print('from txl433 ',obs_emb.shape)
         qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
         # TODO : In our case the obs_emb is 3 dimensional, so need an additional holder
 
@@ -480,6 +480,7 @@ class MemTransformerLM(nn.Module):
 
             # TODO : The memory should be the same hidden layer's state of the previous T timesteps
             mems_i = None if mems is None else mems[i]
+            # print('from txl483 shapes : ', core_out.shape, pos_emb.shape, self.r_w_bias.shape, self.r_r_bias.shape, dec_attn_mask.shape, mems_i.shape)
             core_out = layer(core_out, pos_emb, self.r_w_bias,
                     self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
             hids.append(core_out)
