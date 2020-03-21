@@ -171,6 +171,9 @@ def act(
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
+        # explicitly make done False to allow the loop to run
+        env_output['done'] = torch.tensor([0], dtype=torch.uint8)
+
         agent_state = model.initial_state(batch_size=1)
 
         # TODO DEBUG : negative probability coming up here
@@ -191,8 +194,10 @@ def act(
             for i, tensor in enumerate(agent_state):
                 initial_agent_state_buffers[index][i][...] = tensor
 
-            # Do new rollout.
-            for t in range(flags.unroll_length):
+            # Do one new rollout, untill flags.unroll_length
+            t = 0
+            while t < flags.unroll_length and not env_output['done'].item():
+            # for t in range(flags.unroll_length):
                 timings.reset()
 
                 if env_output['done'].item():
@@ -215,6 +220,18 @@ def act(
                     buffers[key][index][t + 1, ...] = agent_output[key]
 
                 timings.time("write")
+                t += 1
+
+            if t != flags.unroll_length:
+                # this means the episode ended before the rollout length
+                # copy the buffer positions towards the end
+                for key in env_output:
+                    buffers[key][index][flags.unroll_length - t:] = buffers[key][index][:t+1]
+                for key in agent_output:
+                    buffers[key][index][flags.unroll_length - t:] = buffers[key][index][:t+1]
+                # update the dones with True for beginning positions
+                buffers['done'][index][:t+1] = torch.Tensor([1]).repeat(t+1)
+
             full_queue.put(index)
 
         if actor_index == 0:
