@@ -189,7 +189,6 @@ def act(
                 initial_agent_state_buffers[index][i][...] = tensor
 
             # Do new rollout.
-            mems = None
             for t in range(flags.unroll_length):
                 timings.reset()
 
@@ -454,13 +453,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     free_queue = ctx.SimpleQueue()
     full_queue = ctx.SimpleQueue()
 
-    # actor = act(flags,
-    #             0,
-    #             free_queue,
-    #             full_queue,
-    #             model,
-    #             buffers,
-    #             initial_agent_state_buffers)
     for i in range(flags.num_actors):
         actor = ctx.Process(
             target=act,
@@ -804,30 +796,20 @@ class AtariNet(nn.Module):
 
         # Fully connected layer.
         # Changed the FC output to match the transformer input of 512 dimensions
-        transformer_in_features = 512 - num_actions - 1
-        # TODO : 3872 is the output of the conv layers, see if this needs to be changed
-        self.fc = nn.Linear(3872, transformer_in_features)
+
+        self.fc = nn.Linear(3872, 256)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
         ###############################################################transformer
-        # self.use_lstm = use_lstm
-        # if use_lstm:
-        #     self.core = nn.LSTM(core_output_size, core_output_size, 2)
         # TODO : 1st replacement, sanity check the parameters
-        # Used core_output_size in the d_model, n_head and d_head as well
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
-
         # TODO : Change the n_layer=1 to 12
-        #self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size//8, d_model=core_output_size, d_inner=2048,
-        #                            dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=0, ext_len=0)
         self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size // 8,
                                      d_model=core_output_size, d_inner=2048,
                                     dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=1, ext_len=0,
                                      use_stable_version=True, use_gate=False)
         self.core.apply(weights_init)
-
-        # TODO : Check if these layers need to be initialized
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
 
@@ -843,8 +825,6 @@ class AtariNet(nn.Module):
     def forward(self, inputs, core_state=(), mems=None):
 
         x = inputs["frame"]
-        # TODO DEBUG : This T and B come out to be 1, 1 each due to the env_output which is being fed.
-        #               The env_output['frame'] is a 1,1,4,84,84 tensor
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
@@ -867,9 +847,6 @@ class AtariNet(nn.Module):
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
 
-        #what's happening here?
-        # print('REWARD SHAPE: ', inputs['reward'].shape)
-        # print('X shape: ', x.shape)
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
         ###############################################################transformer
@@ -897,22 +874,6 @@ class AtariNet(nn.Module):
         # TODO : The current memory is put as None since I've instantiated TransformerLM with
         #  mem_len = 0 above
 
-        # for input, nd in zip(core_input.unbind(), notdone.unbind()):
-        #     # Reset core state to zero whenever an episode ended.
-        #     # Make `done` broadcastable with (num_layers, B, hidden_size)
-        #     # states:
-        #     nd = nd.view(1, -1, 1)
-        #     core_state = tuple(nd * s for s in core_state)
-        #     output, core_state = self.core(input.unsqueeze(0), core_state)
-        #     core_output_list.append(output)
-
-        # TODO : I dont think the following line is required on core_output anymore
-        # core_output = torch.flatten(torch.cat(core_output_list), 0, 1)
-
-        # else:
-        #     core_output = core_input
-        #     core_state = tuple()
-
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
@@ -926,9 +887,6 @@ class AtariNet(nn.Module):
             # Don't sample when testing.
             action = torch.argmax(policy_logits, dim=1)
 
-        #IS THIS NECESSARY? If yes then switch to transpose
-        # print('')
-        # print('policy logits : {} and T : {} B : {}'.format(policy_logits.shape, T, B))
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
 
