@@ -115,6 +115,10 @@ parser.add_argument('--max_step', type=int, default=100000,
                     help='upper epoch limit')
 parser.add_argument('--eta_min', type=float, default=0.0,
                     help='min learning rate for cosine scheduler')
+
+parser.add_argument('--use_pretrained', action='store_true',
+                    help='use the pretrained model identified by --xpid')
+
 # yapf: enable
 
 
@@ -414,6 +418,18 @@ def get_scheduler(flags, optimizer):
 
 
 def train(flags):  # pylint: disable=too-many-branches, too-many-statements
+
+    # load the previous config if use_pretrained is true
+    if flags.use_pretrained:
+        logging.info('Using Pretrained Model')
+        class Bunch(object):
+            def __init__(self, adict):
+                self.__dict__.update(adict)
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs/torchbeast/'+flags.xpid+'/model.tar')
+        pretrained_model = torch.load(model_path, map_location='cpu' if flags.disable_cuda else 'gpu')
+        flags = Bunch(pretrained_model['flags'])
+        flags.use_pretrained = True
+
     if flags.xpid is None:
         flags.xpid = "torchbeast-%s" % time.strftime("%Y%m%d-%H%M%S")
     plogger = file_writer.FileWriter(
@@ -527,6 +543,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
     step, stats = 0, {}
+
+    if flags.use_pretrained:
+        logging.info('Using Pretrained Model -> loading learner_model, optimizer, scheduler states')
+        learner_model.load_state_dict(pretrained_model['model_state_dict'])
+        optimizer.load_state_dict(pretrained_model['optimizer_state_dict'])
+        scheduler.load_state_dict(pretrained_model['scheduler_state_dict'])
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
