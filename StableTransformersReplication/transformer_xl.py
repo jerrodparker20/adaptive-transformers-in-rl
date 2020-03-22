@@ -454,11 +454,15 @@ class MemTransformerLM(nn.Module):
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
         if not (padding_mask is None):
+            #print('PADING: ', padding_mask[:,:,0])
+            #print('Dec attn orig: ', dec_attn_mask[:,:,0])
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
+            #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
             #want the mlen diagonal to be 0's so that each query can attend
             #to itself
-            dec_attn_mask[range(qlen), range(mlen, klen)] = False
+            dec_attn_mask[range(qlen), range(mlen, klen), :] = False
+            #print('AFTER: ', dec_attn_mask[:,:,0])
             #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
