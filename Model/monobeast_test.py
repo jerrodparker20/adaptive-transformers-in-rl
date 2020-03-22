@@ -933,8 +933,6 @@ class AtariNet(nn.Module):
                 print('PADDING: ', padding_mask)
                 print("LOGITS: ", policy_logits)
 
-            #need to change nan's to 0's
-            policy_logits[policy_logits != policy_logits] = 0.
 
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:

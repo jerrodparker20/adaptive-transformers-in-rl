@@ -432,7 +432,7 @@ class MemTransformerLM(nn.Module):
     # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
     # that of dec_input, which is unrolled length = query length and batch_size
     # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
-    def _forward(self, obs_emb, padding_mask, mems=None, mem_padding=None):
+    def _forward(self, obs_emb, padding_mask, mems=None):
 
         qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
 
@@ -454,7 +454,6 @@ class MemTransformerLM(nn.Module):
         # never need padding
         if not (padding_mask is None):
             # concat the memory padding along with the padding_mask
-            padding_mask = torch.cat([mem_padding, padding_mask], dim=1)
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
             #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
@@ -503,7 +502,19 @@ class MemTransformerLM(nn.Module):
             # print('INITIALIZED MEMS')
             mems = self.init_mems()
 
-        hidden, new_mems = self._forward(data, padding_mask, mems=mems, mem_padding=mem_padding)
+        #Concatenate mem_padding and padding_mask (slight modifications if None)
+        padding_mask2 = mem_padding
+        if padding_mask2 is None:
+            padding_mask2 = padding_mask
+        elif padding_mask is not None:
+            padding_mask2 = torch.cat([mem_padding, padding_mask], dim=1)
+
+        if mem_padding is not None and padding_mask is not None:
+            print('Adding orig: ', padding_mask[:,:,0])
+            print('mem_padding: ', mem_padding[:,:,0])
+            print('Result: ', padding_mask2[:,:,0])
+
+        hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
 
         return hidden, new_mems
 
