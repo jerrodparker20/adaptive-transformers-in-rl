@@ -171,16 +171,17 @@ def act(
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
-        # explicitly make done False to allow the loop to run
-        env_output['done'] = torch.tensor([0], dtype=torch.uint8)
 
         agent_state = model.initial_state(batch_size=1)
-
-        agent_output, unused_state, mems, mem_padding = model(env_output, agent_state, mems=None, mem_padding=None)
+        mems, mem_padding = None, None
+        agent_output, unused_state, mems, mem_padding = model(env_output, agent_state, mems, mem_padding)
         while True:
             index = free_queue.get()
             if index is None:
                 break
+
+            # explicitly make done False to allow the loop to run
+            env_output['done'] = torch.tensor([0], dtype=torch.uint8)
 
             # Write old rollout end.
             for key in env_output:
@@ -928,10 +929,10 @@ class AtariNet(nn.Module):
 
         if self.training:
             # Sample from multinomial distribution for exploration
-            if not (padding_mask is None) and padding_mask.shape[1] > 1:
-                print('Padding shape: {}, logits shape: {}'.format(padding_mask.shape, policy_logits.shape))
-                print('PADDING: ', padding_mask)
-                print("LOGITS: ", policy_logits)
+            # if not (padding_mask is None) and padding_mask.shape[1] > 1:
+            #     print('Padding shape: {}, logits shape: {}'.format(padding_mask.shape, policy_logits.shape))
+            #     print('PADDING: ', padding_mask)
+            #     print("LOGITS: ", policy_logits)
 
 
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
