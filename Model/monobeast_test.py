@@ -176,11 +176,7 @@ def act(
 
         agent_state = model.initial_state(batch_size=1)
 
-        # TODO DEBUG : negative probability coming up here
-        # print('Env output shape 1: ',env_output['frame'].shape)
-        # print('AGENT STATE: ', agent_state)
-
-        agent_output, unused_state, mems = model(env_output, agent_state, mems=None)
+        agent_output, unused_state, mems, mem_padding = model(env_output, agent_state, mems=None, mem_padding=None)
         while True:
             index = free_queue.get()
             if index is None:
@@ -206,7 +202,7 @@ def act(
                     #HERE IS WHY B=1, T=1
                     # print('Env output shape: ',env_output['frame'].shape)
                     # print('ACTING')
-                    agent_output, agent_state, mems = model(env_output, agent_state, mems)
+                    agent_output, agent_state, mems, mem_padding = model(env_output, agent_state, mems, mem_padding)
 
                 timings.time("model")
 
@@ -306,7 +302,7 @@ def learn(
         # Here entire 81 length sequence is considered as a query, and is autoregressively being attended to the
         # keys and values of length 81. This sequence length when becomes very large is when we'll need memory to
         # kick in
-        learner_outputs, unused_state, unused_mems = model(batch, initial_agent_state, mems=None)
+        learner_outputs, unused_state, unused_mems, mem_padding = model(batch, initial_agent_state, mems=None, mem_padding=None)
 
         # Take final value function slice for bootstrapping.
         # this is the final value from this trajectory
@@ -709,12 +705,13 @@ def test(flags, num_episodes: int = 10):
     returns = []
 
     mems = None
+    mem_padding = None
     while len(returns) < num_episodes:
         if flags.mode == "test_render":
             env.gym_env.render()
 
         # TODO: Check that this call to model is correct
-        agent_outputs, core_state, mems = model(observation, mems=mems)
+        agent_outputs, core_state, mems, mem_padding = model(observation, mems=mems, mem_padding=mem_padding)
         policy_outputs, _ = agent_outputs
         observation = env.step(policy_outputs["action"])
         if observation["done"].item():
@@ -869,7 +866,7 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=(), mems=None):
+    def forward(self, inputs, core_state=(), mems=None, mem_padding=None):
 
         x = inputs["frame"]
         T, B, *_ = x.shape
@@ -884,7 +881,6 @@ class AtariNet(nn.Module):
             res_input = x
             x = self.resnet2[i](x)
             x += res_input
-        
         x = F.relu(x)
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
@@ -911,13 +907,24 @@ class AtariNet(nn.Module):
         if not padding_mask.any().item(): #In this case no need for padding_mask
             padding_mask = None
 
-        core_output, mems = self.core(core_input, mems, padding_mask=padding_mask)   # core_input is of shape (T, B, ...)
+        core_output, mems = self.core(core_input, mems, padding_mask=padding_mask, mem_padding=mem_padding)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
         policy_logits = policy_logits.reshape(T*B, self.num_actions)
+        # # if policy_logits.shape[0] == 32 and policy_logits.shape[1] == 6:
+        # if not torch.all(policy_logits == policy_logits).item():
+        #     # nans only come when the learner_model calls this forward
+        #     print('from monobeast 921\n', policy_logits)
+        #     print('core output : ',core_output.shape, '\n', core_output)
+        #     print('core input : \n', core_input)
+        #     print('mask : \n', padding_mask)
+        #     print('mems : \n', mems)
+        #     torch.save(core_input, './core_input.pt')
+        #     torch.save(padding_mask, './padding_mask.pt')
+        #     torch.save(mems, './mems.pt')
 
         if self.training:
             # Sample from multinomial distribution for exploration
@@ -941,7 +948,7 @@ class AtariNet(nn.Module):
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state, mems
+            core_state, mems, padding_mask
         )
 
 
@@ -969,13 +976,3 @@ def main(flags):
 if __name__ == "__main__":
     flags = parser.parse_args()
     main(flags)
-
-
-# TODO : Should we have this functinality as well, to load the model if this is not a restart?
-# if args.restart:
-#     if os.path.exists(os.path.join(args.restart_dir, 'optimizer.pt')):
-#         with open(os.path.join(args.restart_dir, 'optimizer.pt'), 'rb') as f:
-#             opt_state_dict = torch.load(f)
-#             optimizer.load_state_dict(opt_state_dict)
-#     else:
-#         print('Optimizer was not saved. Start from scratch.')

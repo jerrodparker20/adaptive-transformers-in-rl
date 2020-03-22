@@ -262,6 +262,7 @@ Path to log file already exists. New data will be appended.
 Saving logs data to ./logs/torchbeast/example/logs.csv
 Saving logs' fields to ./logs/torchbeast/example/fields.csv
 Path to log file already exists. New data will be appended.
+<<<<<<< Updated upstream
 Saving logs data to ./logs/torchbeast/example/logs.csv
 Saving logs' fields to ./logs/torchbeast/example/fields.csv
 Path to log file already exists. New data will be appended.
@@ -325,3 +326,5 @@ Path to log file already exists. New data will be appended.
 Saving logs data to ./logs/torchbeast/example/logs.csv
 Saving logs' fields to ./logs/torchbeast/example/fields.csv
 Path to log file already exists. New data will be appended.
+=======
+>>>>>>> Stashed changes

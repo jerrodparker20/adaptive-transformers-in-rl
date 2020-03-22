@@ -138,8 +138,6 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
-        # TODO DEBUG, Why dec_inp2 used in the comment above?
-        # TODO : Changed dec_inp2 to dec_inp
         dec_inp2 = self.layer_norm1(dec_inp)
         dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
                                 attn_mask=dec_attn_mask,
@@ -434,7 +432,7 @@ class MemTransformerLM(nn.Module):
     # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
     # that of dec_input, which is unrolled length = query length and batch_size
     # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
-    def _forward(self, obs_emb, padding_mask, mems=None):
+    def _forward(self, obs_emb, padding_mask, mems=None, mem_padding=None):
 
         qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
 
@@ -447,6 +445,7 @@ class MemTransformerLM(nn.Module):
 
         klen = mlen + qlen
 
+        # create the mask taking in consideration the mlen as well. All memory should be attended by the first query
         dec_attn_mask = torch.triu(
             obs_emb.new_ones(qlen, klen), diagonal=1+mlen).bool()[:,:,None]
 
@@ -454,8 +453,8 @@ class MemTransformerLM(nn.Module):
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
         if not (padding_mask is None):
-            #print('PADING: ', padding_mask[:,:,0])
-            #print('Dec attn orig: ', dec_attn_mask[:,:,0])
+            # concat the memory padding along with the padding_mask
+            padding_mask = torch.cat([mem_padding, padding_mask], dim=1)
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
             #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
@@ -496,7 +495,7 @@ class MemTransformerLM(nn.Module):
         return core_out, new_mems
 
 
-    def forward(self, data, mems, padding_mask):
+    def forward(self, data, mems, padding_mask, mem_padding):
         #padding_mask should be shape 1 X (mlen+qlen) X batch_size,
         #which we apply row wise
 
@@ -504,7 +503,7 @@ class MemTransformerLM(nn.Module):
             # print('INITIALIZED MEMS')
             mems = self.init_mems()
 
-        hidden, new_mems = self._forward(data, padding_mask, mems=mems)
+        hidden, new_mems = self._forward(data, padding_mask, mems=mems, mem_padding=mem_padding)
 
         return hidden, new_mems
 
