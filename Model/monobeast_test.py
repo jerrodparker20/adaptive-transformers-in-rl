@@ -226,9 +226,9 @@ def act(
                 # this means the episode ended before the rollout length
                 # copy the buffer positions towards the end
                 for key in env_output:
-                    buffers[key][index][flags.unroll_length - t:] = buffers[key][index][:t+1]
+                    buffers[key][index][flags.unroll_length - t:] = torch.clone(buffers[key][index][:t+1])
                 for key in agent_output:
-                    buffers[key][index][flags.unroll_length - t:] = buffers[key][index][:t+1]
+                    buffers[key][index][flags.unroll_length - t:] = torch.clone(buffers[key][index][:t+1])
                 # update the dones with True for beginning positions
                 buffers['done'][index][:t+1] = torch.tensor([True]).repeat(t+1)
 
@@ -905,7 +905,7 @@ class AtariNet(nn.Module):
         padding_mask = inputs['done'].unsqueeze(0)
         if padding_mask.dim() > 2: #This only seems to not happen on first state ever in env.initialize()
             #print('PADDING DIM:', padding_mask.shape)
-            padding_mask[:, 0, :] = True #TODO REMOVE THIS LINE
+            #padding_mask[:, 0, :] = True #TODO REMOVE THIS LINE FOR TESTING ONLY
             padding_mask[:,-1,:] = False #if last row is Done then don't want to mask
             #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
         if not padding_mask.any().item(): #In this case no need for padding_mask
@@ -918,8 +918,17 @@ class AtariNet(nn.Module):
         baseline = self.baseline(core_output)
 
         policy_logits = policy_logits.reshape(T*B, self.num_actions)
+
         if self.training:
             # Sample from multinomial distribution for exploration
+            if not (padding_mask is None) and padding_mask.shape[1] > 1:
+                print('Padding shape: {}, logits shape: {}'.format(padding_mask.shape, policy_logits.shape))
+                print('PADDING: ', padding_mask)
+                print("LOGITS: ", policy_logits)
+
+            #need to change nan's to 0's
+            policy_logits[policy_logits != policy_logits] = 0.
+
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.

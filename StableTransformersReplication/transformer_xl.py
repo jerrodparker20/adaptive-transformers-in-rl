@@ -307,6 +307,8 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
                 attn_score = attn_score.float().masked_fill(
                     attn_mask[:,:,:,None], -float('inf')).type_as(attn_score)
 
+        #print('ATTENTION SCORE: ', attn_score)
+
         # [qlen x klen x bsz x n_head]
         attn_prob = F.softmax(attn_score, dim=1)
         attn_prob = self.dropatt(attn_prob)
@@ -452,7 +454,7 @@ class MemTransformerLM(nn.Module):
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
         if not (padding_mask is None):
-            dec_attn_mask.repeat(1,1,bsz)
+            dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
             #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
