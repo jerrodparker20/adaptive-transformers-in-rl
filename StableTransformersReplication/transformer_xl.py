@@ -456,6 +456,9 @@ class MemTransformerLM(nn.Module):
         if not (padding_mask is None):
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
+            #want the mlen diagonal to be 0's so that each query can attend
+            #to itself
+            dec_attn_mask[range(qlen), range(mlen, klen)] = False
             #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
