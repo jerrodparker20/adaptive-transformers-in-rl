@@ -132,24 +132,34 @@ logging.basicConfig(
 Buffers = typing.Dict[str, typing.List[torch.Tensor]]
 
 
-def compute_baseline_loss(advantages):
+def compute_baseline_loss(advantages, padding_mask):
+    if padding_mask is not None:
+        advantages = advantages * padding_mask
     return 0.5 * torch.sum(advantages ** 2)
 
-
-def compute_entropy_loss(logits):
+#padding_mask has 0's wherever padding should mask the logits
+def compute_entropy_loss(logits, padding_mask):
     """Return the entropy loss, i.e., the negative entropy of the policy."""
     policy = F.softmax(logits, dim=-1)
     log_policy = F.log_softmax(logits, dim=-1)
+
+    if padding_mask is not None:
+        #print('log_policyshape: ', log_policy.shape)
+        #print('padding mask: ', padding_mask.shape)
+        log_policy = log_policy * padding_mask.unsqueeze(2)
+
     return torch.sum(policy * log_policy)
 
 
-def compute_policy_gradient_loss(logits, actions, advantages):
+def compute_policy_gradient_loss(logits, actions, advantages, padding_mask):
     cross_entropy = F.nll_loss(
         F.log_softmax(torch.flatten(logits, 0, 1), dim=-1),
         target=torch.flatten(actions, 0, 1),
         reduction="none",
     )
     cross_entropy = cross_entropy.view_as(advantages)
+    if padding_mask is not None:
+        cross_entropy = cross_entropy * padding_mask
     return torch.sum(cross_entropy * advantages.detach())
 
 
@@ -174,14 +184,16 @@ def act(
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
-        agent_output, unused_state, mems, mem_padding = model(env_output, agent_state, mems, mem_padding)
+        agent_output, unused_state, mems, mem_padding, ind_first_done = model(env_output, agent_state, mems, mem_padding)
         while True:
             index = free_queue.get()
             if index is None:
                 break
 
             # explicitly make done False to allow the loop to run
-            env_output['done'] = torch.tensor([0], dtype=torch.uint8)
+            #Don't need to set 'done' to true since now take step out of done state
+            #when do arrive at 'done'
+            #env_output['done'] = torch.tensor([0], dtype=torch.uint8)
 
             # Write old rollout end.
             for key in env_output:
@@ -197,16 +209,16 @@ def act(
             # for t in range(flags.unroll_length):
                 timings.reset()
 
-                if env_output['done'].item():
-                    mems = None
+                #REmoved since never this will never be true (MOVED TO AFTER FOR LOOP)
+                #if env_output['done'].item():
+                #    mems = None
+
                 with torch.no_grad():
-                    #HERE IS WHY B=1, T=1
-                    # print('Env output shape: ',env_output['frame'].shape)
-                    # print('ACTING')
-                    agent_output, agent_state, mems, mem_padding = model(env_output, agent_state, mems, mem_padding)
+                    agent_output, agent_state, mems, mem_padding, ind_first_done = model(env_output, agent_state, mems, mem_padding)
 
                 timings.time("model")
 
+                #TODO: Shakti add action repeat?
                 env_output = env.step(agent_output["action"])
 
                 timings.time("step")
@@ -219,15 +231,15 @@ def act(
                 timings.time("write")
                 t += 1
 
+            if env_output['done'].item():
+                mems = None
+                #Take arbitrary step to reset environment
+                #TODO: Shakti do you agree with this?
+                env_output = env.step(2)
+
             if t != flags.unroll_length:
-                # this means the episode ended before the rollout length
-                # copy the buffer positions towards the end
-                for key in env_output:
-                    buffers[key][index][flags.unroll_length - t:] = torch.clone(buffers[key][index][:t+1])
-                for key in agent_output:
-                    buffers[key][index][flags.unroll_length - t:] = torch.clone(buffers[key][index][:t+1])
-                # update the dones with True for beginning positions
-                buffers['done'][index][:t+1] = torch.tensor([True]).repeat(t+1)
+                #TODO I checked and seems good but Shakti can you check as well?
+                buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
             full_queue.put(index)
 
@@ -303,16 +315,23 @@ def learn(
         # Here entire 81 length sequence is considered as a query, and is autoregressively being attended to the
         # keys and values of length 81. This sequence length when becomes very large is when we'll need memory to
         # kick in
-        learner_outputs, unused_state, unused_mems, mem_padding = model(batch, initial_agent_state, mems=None, mem_padding=None)
+        learner_outputs, unused_state, unused_mems, mem_padding, ind_first_done = model(batch, initial_agent_state, mems=None, mem_padding=None)
+        #Here mem_padding is same as "batch" padding for this iteration so can use
+        #for masking loss
+
 
         # Take final value function slice for bootstrapping.
         # this is the final value from this trajectory
-        bootstrap_value = learner_outputs["baseline"][-1]
-
+        if ind_first_done is not None:
+            bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)] #Is T X B
+        else:
+            bootstrap_value = learner_outputs["baseline"][-1]
 
         # Move from obs[t] -> action[t] to action[t] -> obs[t].
         batch = {key: tensor[1:] for key, tensor in batch.items()}
         learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
+
+        #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
 
         rewards = batch["reward"]
         if flags.reward_clipping == "abs_one":
@@ -324,7 +343,7 @@ def learn(
 
         vtrace_returns = vtrace.from_logits(
             behavior_policy_logits=batch["policy_logits"],
-            target_policy_logits=learner_outputs["policy_logits"],
+            target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
             actions=batch["action"],
             discounts=discounts,
             rewards=clipped_rewards,
@@ -334,16 +353,24 @@ def learn(
 
         # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
         #                   to do this efficiently
+        # Advantages are [rollout_len, batch_size]
+
+        # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
+        pad_mask = ~(mem_padding.squeeze(0)[1:]) if mem_padding is not None else None
+
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["policy_logits"],
             batch["action"],
             vtrace_returns.pg_advantages,
+            pad_mask
         )
         baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs["baseline"]
+            vtrace_returns.vs - learner_outputs["baseline"],
+            pad_mask
         )
         entropy_loss = flags.entropy_cost * compute_entropy_loss(
-            learner_outputs["policy_logits"]
+            learner_outputs["policy_logits"],
+            pad_mask
         )
 
         total_loss = pg_loss + baseline_loss + entropy_loss
@@ -712,7 +739,7 @@ def test(flags, num_episodes: int = 10):
             env.gym_env.render()
 
         # TODO: Check that this call to model is correct
-        agent_outputs, core_state, mems, mem_padding = model(observation, mems=mems, mem_padding=mem_padding)
+        agent_outputs, core_state, mems, mem_padding, ind_first_done = model(observation, mems=mems, mem_padding=mem_padding)
         policy_outputs, _ = agent_outputs
         observation = env.step(policy_outputs["action"])
         if observation["done"].item():
@@ -899,12 +926,18 @@ class AtariNet(nn.Module):
         #column masked.
         # TODO: This doesn't work if need to mask memory as well (right now we don't need to)
 
-        padding_mask = inputs['done'].unsqueeze(0)
-        if padding_mask.dim() > 2: #This only seems to not happen on first state ever in env.initialize()
-            #print('PADDING DIM:', padding_mask.shape)
-            #padding_mask[:, 0, :] = True #TODO REMOVE THIS LINE FOR TESTING ONLY
-            padding_mask[:,-1,:] = False #if last row is Done then don't want to mask
+        padding_mask = inputs['done']
+        ind_first_done = None
+        if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
+
+            #TODO Check correct (I think we want to turn the first done element to 0 since isn't actually padding).
+            ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
+            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
+            padding_mask[ind_first_done] = False
+
             #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
+
+        padding_mask = padding_mask.unsqueeze(0)
         if not padding_mask.any().item(): #In this case no need for padding_mask
             padding_mask = None
 
@@ -947,7 +980,7 @@ class AtariNet(nn.Module):
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state, mems, padding_mask
+            core_state, mems, padding_mask, ind_first_done
         )
 
 
