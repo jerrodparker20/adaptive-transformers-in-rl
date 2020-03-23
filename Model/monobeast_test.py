@@ -64,6 +64,8 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
+parser.add_argument("--chunk_size", default=80, type=int,
+                    help="Size of chunks to chop batch into")
 
 # This is by default true in our case
 # parser.add_argument("--use_lstm", action="store_true",
@@ -236,6 +238,8 @@ def act(
                 #Take arbitrary step to reset environment
                 env_output = env.step(torch.tensor([2]))
 
+            buffers['len_traj'][index][0] = t
+
             if t != flags.unroll_length:
                 #TODO I checked and seems good but Shakti can you check as well?
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
@@ -266,6 +270,12 @@ def get_batch(
     with lock:
         timings.time("lock")
         indices = [full_queue.get() for _ in range(flags.batch_size)]
+
+        # TODO: Check if emptying full_queue and then readding to it takes very long,
+        #       seems like the only way to ensure a batch of similar length elements
+        # One problem with doing this is that if get a really short trajectory, may never end up
+        # using it. DONT CHANGE THIS FOR NOW.
+
         timings.time("dequeue")
     batch = {
         key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers
@@ -304,113 +314,113 @@ def learn(
         Update the parameters of the central learner,
         copy the parameters of the central learner back to the actors
         """
-        # print('RUNNING MAIN MODEL')
-        # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
-        # print('batch size : ', batch['frame'].size())
 
-        # TODO Next Step: think about chopping the sequences up for attending to long sequences
-        # TODO Next Step: make the actors put only one sequence in one rollout. And then mask the remaining rollout
-        #       positions. And then change the triu in line 461 in TXL
-        # Here entire 81 length sequence is considered as a query, and is autoregressively being attended to the
-        # keys and values of length 81. This sequence length when becomes very large is when we'll need memory to
-        # kick in
-        learner_outputs, unused_state, unused_mems, mem_padding, ind_first_done = model(batch, initial_agent_state, mems=None, mem_padding=None)
-        #Here mem_padding is same as "batch" padding for this iteration so can use
-        #for masking loss
+        # TODO: Chop up batch into smaller pieces to run through TXL one at a time (caching previous as memory)
+        # TODO: Change batch function to look for trajectories of similar lengths
+        # TODO: Add in adaptive attention (and think of how things change (for ex no memory))
+        #print({key: batch[key].shape for key in batch})
+        mems, mem_padding = None, None
+        for i in range(0, flags.unroll_length+1, flags.chunk_size):
+            mini_batch = {key: batch[key][i:i+flags.chunk_size] for key in batch if key != 'len_traj'}
+            #Note that initial agent state isn't used by transformer (I think this is hidden state)
+            #Will need to change if want to use this with LSTM
+            learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
+                                                                                     mems=mems, mem_padding=mem_padding)
+            #Here mem_padding is same as "batch" padding for this iteration so can use
+            #for masking loss
 
+            # Take final value function slice for bootstrapping.
+            # this is the final value from this trajectory
+            if ind_first_done is not None:
+                # B dimensional tensor
+                bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)]
+            else:
+                bootstrap_value = learner_outputs["baseline"][-1]
 
-        # Take final value function slice for bootstrapping.
-        # this is the final value from this trajectory
-        if ind_first_done is not None:
-            # B dimensional tensor
-            bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)]
-        else:
-            bootstrap_value = learner_outputs["baseline"][-1]
+            # Move from obs[t] -> action[t] to action[t] -> obs[t].
+            batch = {key: tensor[1:] for key, tensor in batch.items()}
+            learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
 
-        # Move from obs[t] -> action[t] to action[t] -> obs[t].
-        batch = {key: tensor[1:] for key, tensor in batch.items()}
-        learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
+            #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
 
-        #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
+            rewards = batch["reward"]
+            if flags.reward_clipping == "abs_one":
+                clipped_rewards = torch.clamp(rewards, -1, 1)
+            elif flags.reward_clipping == "none":
+                clipped_rewards = rewards
 
-        rewards = batch["reward"]
-        if flags.reward_clipping == "abs_one":
-            clipped_rewards = torch.clamp(rewards, -1, 1)
-        elif flags.reward_clipping == "none":
-            clipped_rewards = rewards
+            discounts = (~batch["done"]).float() * flags.discounting
 
-        discounts = (~batch["done"]).float() * flags.discounting
+            vtrace_returns = vtrace.from_logits(
+                behavior_policy_logits=batch["policy_logits"],
+                target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
+                actions=batch["action"],
+                discounts=discounts,
+                rewards=clipped_rewards,
+                values=learner_outputs["baseline"],
+                bootstrap_value=bootstrap_value,
+            )
 
-        vtrace_returns = vtrace.from_logits(
-            behavior_policy_logits=batch["policy_logits"],
-            target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
-            actions=batch["action"],
-            discounts=discounts,
-            rewards=clipped_rewards,
-            values=learner_outputs["baseline"],
-            bootstrap_value=bootstrap_value,
-        )
+            # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
+            #                   to do this efficiently
+            # Advantages are [rollout_len, batch_size]
 
-        # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
-        #                   to do this efficiently
-        # Advantages are [rollout_len, batch_size]
+            # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
+            pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
 
-        # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
-        pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
+            pg_loss = compute_policy_gradient_loss(
+                learner_outputs["policy_logits"],
+                batch["action"],
+                vtrace_returns.pg_advantages,
+                pad_mask
+            )
+            baseline_loss = flags.baseline_cost * compute_baseline_loss(
+                vtrace_returns.vs - learner_outputs["baseline"],
+                pad_mask
+            )
+            entropy_loss = flags.entropy_cost * compute_entropy_loss(
+                learner_outputs["policy_logits"],
+                pad_mask
+            )
 
-        pg_loss = compute_policy_gradient_loss(
-            learner_outputs["policy_logits"],
-            batch["action"],
-            vtrace_returns.pg_advantages,
-            pad_mask
-        )
-        baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs["baseline"],
-            pad_mask
-        )
-        entropy_loss = flags.entropy_cost * compute_entropy_loss(
-            learner_outputs["policy_logits"],
-            pad_mask
-        )
+            total_loss = pg_loss + baseline_loss + entropy_loss
 
-        total_loss = pg_loss + baseline_loss + entropy_loss
+            rows_to_use = []
+            cols_to_use = []
+            for i,val in enumerate(ind_first_done):
+                if val != -1:
+                    rows_to_use.append(val)
+                    cols_to_use.append(i)
 
-        rows_to_use = []
-        cols_to_use = []
-        for i,val in enumerate(ind_first_done):
-            if val != -1:
-                rows_to_use.append(val)
-                cols_to_use.append(i)
+            tmp_mask = torch.zeros_like(batch["done"]).bool()
+            if ind_first_done is not None:
+                tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
+                #if batch["done"].any().item():
+                #    print('TMP MASK: ',tmp_mask)
+                #    print('BATCH DONE: ', batch["done"])
+                #    print()
 
-        tmp_mask = torch.zeros_like(batch["done"]).bool()
-        if ind_first_done is not None:
-            tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
-            #if batch["done"].any().item():
-            #    print('TMP MASK: ',tmp_mask)
-            #    print('BATCH DONE: ', batch["done"])
-            #    print()
-            
-        #episode_returns = batch["episode_return"][batch["done"]]
-        episode_returns = batch["episode_return"][tmp_mask]
+            #episode_returns = batch["episode_return"][batch["done"]]
+            episode_returns = batch["episode_return"][tmp_mask]
 
-        stats = {
-            "episode_returns": tuple(episode_returns.cpu().numpy()),
-            "mean_episode_return": torch.mean(episode_returns).item(),
-            "total_loss": total_loss.item(),
-            "pg_loss": pg_loss.item(),
-            "baseline_loss": baseline_loss.item(),
-            "entropy_loss": entropy_loss.item(),
-        }
+            stats = {
+                "episode_returns": tuple(episode_returns.cpu().numpy()),
+                "mean_episode_return": torch.mean(episode_returns).item(),
+                "total_loss": total_loss.item(),
+                "pg_loss": pg_loss.item(),
+                "baseline_loss": baseline_loss.item(),
+                "entropy_loss": entropy_loss.item(),
+            }
 
-        optimizer.zero_grad()
-        total_loss.backward()
-        if flags.fp16:
-            optimizer.clip_master_grads(flags.grad_norm_clipping)
-        else:
-            nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
-        optimizer.step()
-        # scheduler is being stepped in the lock of batch_and_learn itself
-        # scheduler.step()
+            optimizer.zero_grad()
+            total_loss.backward()
+            if flags.fp16:
+                optimizer.clip_master_grads(flags.grad_norm_clipping)
+            else:
+                nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
+            optimizer.step()
+            # scheduler is being stepped in the lock of batch_and_learn itself
+            # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
         return stats
@@ -428,6 +438,7 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         baseline=dict(size=(T + 1,), dtype=torch.float32),
         last_action=dict(size=(T + 1,), dtype=torch.int64),
         action=dict(size=(T + 1,), dtype=torch.int64),
+        len_traj=dict(size=(1,), dtype=torch.int32) #is min(length til trajectory is done, T)
     )
     buffers: Buffers = {key: [] for key in specs}
     for _ in range(flags.num_buffers):
