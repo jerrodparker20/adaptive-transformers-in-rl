@@ -184,7 +184,7 @@ def act(
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
-        agent_output, unused_state, mems, mem_padding, ind_first_done = model(env_output, agent_state, mems, mem_padding)
+        agent_output, unused_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
         while True:
             index = free_queue.get()
             if index is None:
@@ -214,7 +214,7 @@ def act(
                 #    mems = None
 
                 with torch.no_grad():
-                    agent_output, agent_state, mems, mem_padding, ind_first_done = model(env_output, agent_state, mems, mem_padding)
+                    agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
 
                 timings.time("model")
 
@@ -234,7 +234,6 @@ def act(
             if env_output['done'].item():
                 mems = None
                 #Take arbitrary step to reset environment
-                #TODO: Shakti do you agree with this?
                 env_output = env.step(2)
 
             if t != flags.unroll_length:
@@ -323,7 +322,8 @@ def learn(
         # Take final value function slice for bootstrapping.
         # this is the final value from this trajectory
         if ind_first_done is not None:
-            bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)] #Is T X B
+            # B dimensional tensor
+            bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)]
         else:
             bootstrap_value = learner_outputs["baseline"][-1]
 
@@ -922,19 +922,12 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-        #Need padding_mask to be qlenX(qlen+mlen)Xbatch_size and shouldn't have final
-        #column masked.
-        # TODO: This doesn't work if need to mask memory as well (right now we don't need to)
-
         padding_mask = inputs['done']
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
-
-            #TODO Check correct (I think we want to turn the first done element to 0 since isn't actually padding).
             ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
-            padding_mask[ind_first_done] = False
-
+            padding_mask[ind_first_done, range(B)] = False
             #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
 
         padding_mask = padding_mask.unsqueeze(0)
@@ -966,8 +959,6 @@ class AtariNet(nn.Module):
             #     print('Padding shape: {}, logits shape: {}'.format(padding_mask.shape, policy_logits.shape))
             #     print('PADDING: ', padding_mask)
             #     print("LOGITS: ", policy_logits)
-
-
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
