@@ -738,10 +738,8 @@ def test(flags, num_episodes: int = 10):
         if flags.mode == "test_render":
             env.gym_env.render()
 
-        # TODO: Check that this call to model is correct
         agent_outputs, core_state, mems, mem_padding, ind_first_done = model(observation, mems=mems, mem_padding=mem_padding)
-        policy_outputs, _ = agent_outputs
-        observation = env.step(policy_outputs["action"])
+        observation = env.step(agent_outputs["action"])
         if observation["done"].item():
             returns.append(observation["episode_return"].item())
             logging.info(
