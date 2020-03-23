@@ -234,7 +234,7 @@ def act(
             if env_output['done'].item():
                 mems = None
                 #Take arbitrary step to reset environment
-                env_output = env.step(2)
+                env_output = env.step(torch.tensor([2]))
 
             if t != flags.unroll_length:
                 #TODO I checked and seems good but Shakti can you check as well?
@@ -356,7 +356,7 @@ def learn(
         # Advantages are [rollout_len, batch_size]
 
         # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
-        pad_mask = ~(mem_padding.squeeze(0)[1:]) if mem_padding is not None else None
+        pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
 
         pg_loss = compute_policy_gradient_loss(
             learner_outputs["policy_logits"],
