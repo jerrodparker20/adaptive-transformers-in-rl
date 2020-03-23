@@ -375,7 +375,24 @@ def learn(
 
         total_loss = pg_loss + baseline_loss + entropy_loss
 
-        episode_returns = batch["episode_return"][batch["done"]]
+        rows_to_use = []
+        cols_to_use = []
+        for i,val in enumerate(ind_first_done):
+            if val != -1:
+                rows_to_use.append(val)
+                cols_to_use.append(i)
+
+        tmp_mask = torch.zeros_like(batch["done"]).bool()
+        if ind_first_done is not None:
+            tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
+            #if batch["done"].any().item():
+            #    print('TMP MASK: ',tmp_mask)
+            #    print('BATCH DONE: ', batch["done"])
+            #    print()
+            
+        #episode_returns = batch["episode_return"][batch["done"]]
+        episode_returns = batch["episode_return"][tmp_mask]
+
         stats = {
             "episode_returns": tuple(episode_returns.cpu().numpy()),
             "mean_episode_return": torch.mean(episode_returns).item(),
