@@ -344,8 +344,7 @@ def learn(
             if mini_batch["done"].any().item():
                 print('Indfirstdone: ',ind_first_done)
                 print('miniBATCH DONE: ', mini_batch["done"])
-                print('LAST ACTION: ', mini_batch['last_action'])
-                print('action: ', mini_batch['action'])
+                print('Mem padding: ', mem_padding)
 
             # Take final value function slice for bootstrapping.
             # this is the final value from this trajectory
@@ -403,15 +402,15 @@ def learn(
 
             total_loss = pg_loss + baseline_loss + entropy_loss
 
-            rows_to_use = []
-            cols_to_use = []
-            for i,val in enumerate(ind_first_done):
-                if val != -1:
-                    rows_to_use.append(val)
-                    cols_to_use.append(i)
-
             #tmp_mask is defined above
             if ind_first_done is not None:
+                rows_to_use = []
+                cols_to_use = []
+                for i, val in enumerate(ind_first_done):
+                    if val != -1:
+                        rows_to_use.append(val)
+                        cols_to_use.append(i)
+
                 tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
                 tmp_mask = tmp_mask[1:] #This is how they initially had it so will keep like this
                 if mini_batch["done"].any().item():
@@ -970,9 +969,7 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-
         padding_mask = torch.clone(inputs['done'])
-        #padding_mask = inputs['done']
 
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
@@ -989,18 +986,6 @@ class AtariNet(nn.Module):
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
             padding_mask[0,:] = orig_first_row
-
-            #If ind_first_done == 0 then want to make sure 0 is padded
-
-            #TODO REMOVE THIS
-            #inputs['done'][ind_first_done, range(B)] = False
-            #inputs['done'][0,:] = False
-
-
-            #if padding_mask.any().item():
-            #    print('inputsDone AFTER: ', inputs['done'])
-            #    print('Orig inputs done: ', inputs['done'])
-            #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
 
         padding_mask = padding_mask.unsqueeze(0)
         if not padding_mask.any().item(): #In this case no need for padding_mask
