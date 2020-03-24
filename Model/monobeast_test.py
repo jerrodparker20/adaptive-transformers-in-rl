@@ -210,11 +210,9 @@ def act(
 
             # Do one new rollout, untill flags.unroll_length
             t = 0
-            print('AT START: ', env_output)
             while t < flags.unroll_length and not env_output['done'].item():
             # for t in range(flags.unroll_length):
                 timings.reset()
-
                 #REmoved since never this will never be true (MOVED TO AFTER FOR LOOP)
                 #if env_output['done'].item():
                 #    mems = None
@@ -253,12 +251,6 @@ def act(
                 #TODO: Does this still work now that inputs['done'] not getting changed behind scenes from rpevious bug?
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
-                #Found bug that the end elements of the action buffer are randomly initialized (some large values),
-                #so if end early then these still show up, for ex action=1112949 which doesn't exist and breaks
-                #code when creating 1-hot vector for it.
-                #buffers['last_action'][index][t + 1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
-                #buffers['action'][index][t+1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
-                #INSTEAD OF THIS SHOULD JUST INITIALIZE BUFFERS WITH ALL 0s at beginning
 
             full_queue.put(index)
 
@@ -986,6 +978,7 @@ class AtariNet(nn.Module):
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
 
             ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
+            orig_first_row = torch.clone(padding_mask[0,:])
             ind_first_done[padding_mask[0,:]==1] = 0 #If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
 
             #if padding_mask.any().item():
@@ -995,6 +988,9 @@ class AtariNet(nn.Module):
 
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
+            padding_mask[0,:] = orig_first_row
+
+            #If ind_first_done == 0 then want to make sure 0 is padded
 
             #TODO REMOVE THIS
             #inputs['done'][ind_first_done, range(B)] = False
