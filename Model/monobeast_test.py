@@ -248,6 +248,11 @@ def act(
                 #TODO I checked and seems good but Shakti can you check as well?
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
+                #Found bug that the end elements of the action buffer are randomly initialized (some large values),
+                #so if end early then these still show up, for ex action=1112949 which doesn't exist and breaks
+                #code when creating 1-hot vector for it.
+                buffers['last_action'][index][t + 1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
+
             full_queue.put(index)
 
         if actor_index == 0:
@@ -328,10 +333,19 @@ def learn(
             mini_batch = {key: batch[key][i:i+flags.chunk_size] for key in batch if key != 'len_traj'}
             #Note that initial agent state isn't used by transformer (I think this is hidden state)
             #Will need to change if want to use this with LSTM
+
+            #TODO : Need to change batch->minibatch (batch name gets overwritten)
+            tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
+
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
             #Here mem_padding is same as "batch" padding for this iteration so can use
             #for masking loss
+
+            if mini_batch["done"].any().item():
+                print('Indfirstdone: ',ind_first_done)
+                print('miniBATCH DONE: ', mini_batch["done"])
+
 
             # Take final value function slice for bootstrapping.
             # this is the final value from this trajectory
@@ -342,23 +356,23 @@ def learn(
                 bootstrap_value = learner_outputs["baseline"][-1]
 
             # Move from obs[t] -> action[t] to action[t] -> obs[t].
-            batch = {key: tensor[1:] for key, tensor in batch.items()}
+            mini_batch = {key: tensor[1:] for key, tensor in mini_batch.items()}
             learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
 
             #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
 
-            rewards = batch["reward"]
+            rewards = mini_batch["reward"]
             if flags.reward_clipping == "abs_one":
                 clipped_rewards = torch.clamp(rewards, -1, 1)
             elif flags.reward_clipping == "none":
                 clipped_rewards = rewards
 
-            discounts = (~batch["done"]).float() * flags.discounting
+            discounts = (~mini_batch["done"]).float() * flags.discounting
 
             vtrace_returns = vtrace.from_logits(
-                behavior_policy_logits=batch["policy_logits"],
+                behavior_policy_logits=mini_batch["policy_logits"],
                 target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
-                actions=batch["action"],
+                actions=mini_batch["action"],
                 discounts=discounts,
                 rewards=clipped_rewards,
                 values=learner_outputs["baseline"],
@@ -374,7 +388,7 @@ def learn(
 
             pg_loss = compute_policy_gradient_loss(
                 learner_outputs["policy_logits"],
-                batch["action"],
+                mini_batch["action"],
                 vtrace_returns.pg_advantages,
                 pad_mask
             )
@@ -396,16 +410,18 @@ def learn(
                     rows_to_use.append(val)
                     cols_to_use.append(i)
 
-            tmp_mask = torch.zeros_like(batch["done"]).bool()
+            #tmp_mask is defined above
             if ind_first_done is not None:
                 tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
-                #if batch["done"].any().item():
-                #    print('TMP MASK: ',tmp_mask)
-                #    print('BATCH DONE: ', batch["done"])
-                #    print()
+                tmp_mask = tmp_mask[1:] #This is how they initially had it so will keep like this
+                if mini_batch["done"].any().item():
+                    print('TMP MASK: ',tmp_mask)
+                    print('BATCH DONE: ', mini_batch["done"])
+                    print('shape1: {}, shape2: {}'.format(tmp_mask.shape, mini_batch['done'].shape))
+                    print()
 
-            #episode_returns = batch["episode_return"][batch["done"]]
-            episode_returns = batch["episode_return"][tmp_mask]
+            #episode_returns = mini_batch["episode_return"][mini_batch["done"]]
+            episode_returns = mini_batch["episode_return"][tmp_mask]
 
             stats = {
                 "episode_returns": tuple(episode_returns.cpu().numpy()),
@@ -943,6 +959,8 @@ class AtariNet(nn.Module):
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
+        print('inputs: ', inputs)
+        print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
@@ -952,12 +970,21 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-        padding_mask = inputs['done']
+        padding_mask = torch.clone(inputs['done'])
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
+
             ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
+            ind_first_done[padding_mask[0,:]==1] = 0 #If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+
+            if padding_mask.any().item():
+                print('ORIG ORIG')
+                print('Orig ind-first_done: ', ind_first_done)
+
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
+            if padding_mask.any().item():
+                print('Orig inputs done: ', inputs['done'])
             #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
 
         padding_mask = padding_mask.unsqueeze(0)
