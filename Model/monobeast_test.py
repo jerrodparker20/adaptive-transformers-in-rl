@@ -185,6 +185,7 @@ def act(
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
+        env_output['done'] = torch.tensor([[0]],dtype=torch.uint8)
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
@@ -209,6 +210,7 @@ def act(
 
             # Do one new rollout, untill flags.unroll_length
             t = 0
+            print('AT START: ', env_output)
             while t < flags.unroll_length and not env_output['done'].item():
             # for t in range(flags.unroll_length):
                 timings.reset()
@@ -977,8 +979,8 @@ class AtariNet(nn.Module):
         core_input = core_input.view(T, B, -1)
 
 
-        #padding_mask = torch.clone(inputs['done'])
-        padding_mask = inputs['done']
+        padding_mask = torch.clone(inputs['done'])
+        #padding_mask = inputs['done']
 
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
@@ -993,6 +995,12 @@ class AtariNet(nn.Module):
 
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
+
+            #TODO REMOVE THIS
+            #inputs['done'][ind_first_done, range(B)] = False
+            #inputs['done'][0,:] = False
+
+
             #if padding_mask.any().item():
             #    print('inputsDone AFTER: ', inputs['done'])
             #    print('Orig inputs done: ', inputs['done'])
