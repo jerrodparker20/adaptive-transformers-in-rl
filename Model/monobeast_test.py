@@ -972,19 +972,14 @@ class AtariNet(nn.Module):
 
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
-
-            ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
+            # this block just tries to push the dones one position down so that the loss calculation does account
+            # for that step and not ignores it as mask
+            ind_first_done = padding_mask.long().argmin(0)+1 # will be index of first 1 in each column
             orig_first_row = torch.clone(padding_mask[0,:])
-            ind_first_done[padding_mask[0,:]==1] = 0 #If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
-
-            #if padding_mask.any().item():
-            #    print('ORIG ORIG')
-            #    print('Orig ind-first_done: ', ind_first_done)
-            #    print('inputsDONE BEFORE: ', inputs['done'])
-
-            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
+            ind_first_done[padding_mask[0,:]==1] = 0 # If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 # choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
-            padding_mask[0,:] = orig_first_row
+            padding_mask[0, :] = orig_first_row
 
         padding_mask = padding_mask.unsqueeze(0)
         if not padding_mask.any().item(): #In this case no need for padding_mask
