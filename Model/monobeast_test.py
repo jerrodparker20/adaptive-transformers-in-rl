@@ -64,7 +64,7 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--chunk_size", default=80, type=int,
+parser.add_argument("--chunk_size", default=100, type=int,
                     help="Size of chunks to chop batch into")
 
 # This is by default true in our case
@@ -341,10 +341,10 @@ def learn(
             #Here mem_padding is same as "batch" padding for this iteration so can use
             #for masking loss
 
-            if mini_batch["done"].any().item():
-                print('Indfirstdone: ',ind_first_done)
-                print('miniBATCH DONE: ', mini_batch["done"])
-                print('Mem padding: ', mem_padding)
+            #if mini_batch["done"].any().item():
+            #    print('Indfirstdone: ',ind_first_done)
+            #    print('miniBATCH DONE: ', mini_batch["done"])
+            #    print('Mem padding: ', mem_padding)
 
             # Take final value function slice for bootstrapping.
             # this is the final value from this trajectory
@@ -413,11 +413,10 @@ def learn(
 
                 tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
                 tmp_mask = tmp_mask[1:] #This is how they initially had it so will keep like this
-                if mini_batch["done"].any().item():
-                    print('TMP MASK: ',tmp_mask)
-                    print('BATCH DONE: ', mini_batch["done"])
-                    print('shape1: {}, shape2: {}'.format(tmp_mask.shape, mini_batch['done'].shape))
-                    print()
+                #if mini_batch["done"].any().item():
+                #    print('TMP MASK: ',tmp_mask)
+                #    print('BATCH DONE: ', mini_batch["done"])
+                #    print('shape1: {}, shape2: {}'.format(tmp_mask.shape, mini_batch['done'].shape))
 
             #episode_returns = mini_batch["episode_return"][mini_batch["done"]]
             episode_returns = mini_batch["episode_return"][tmp_mask]
