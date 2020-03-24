@@ -226,6 +226,8 @@ def act(
                 repeat_times = torch.randint(low=1, high=flags.action_repeat+1, size=(1,)).item()
                 for el in range(repeat_times):
                     env_output = env.step(agent_output["action"])
+                    if env_output['done'].item():
+                        break
 
                 timings.time("step")
 
@@ -246,12 +248,15 @@ def act(
 
             if t != flags.unroll_length:
                 #TODO I checked and seems good but Shakti can you check as well?
+                #TODO: Does this still work now that inputs['done'] not getting changed behind scenes from rpevious bug?
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
                 #Found bug that the end elements of the action buffer are randomly initialized (some large values),
                 #so if end early then these still show up, for ex action=1112949 which doesn't exist and breaks
                 #code when creating 1-hot vector for it.
-                buffers['last_action'][index][t + 1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
+                #buffers['last_action'][index][t + 1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
+                #buffers['action'][index][t+1:] = torch.tensor([0]).repeat(flags.unroll_length - t)
+                #INSTEAD OF THIS SHOULD JUST INITIALIZE BUFFERS WITH ALL 0s at beginning
 
             full_queue.put(index)
 
@@ -345,7 +350,8 @@ def learn(
             if mini_batch["done"].any().item():
                 print('Indfirstdone: ',ind_first_done)
                 print('miniBATCH DONE: ', mini_batch["done"])
-
+                print('LAST ACTION: ', mini_batch['last_action'])
+                print('action: ', mini_batch['action'])
 
             # Take final value function slice for bootstrapping.
             # this is the final value from this trajectory
@@ -959,8 +965,8 @@ class AtariNet(nn.Module):
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
-        print('inputs: ', inputs)
-        print('inputs last action', inputs['last_action'])
+        #print('inputs: ', inputs)
+        #print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
@@ -970,21 +976,26 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-        padding_mask = torch.clone(inputs['done'])
+
+        #padding_mask = torch.clone(inputs['done'])
+        padding_mask = inputs['done']
+
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
 
             ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
             ind_first_done[padding_mask[0,:]==1] = 0 #If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
 
-            if padding_mask.any().item():
-                print('ORIG ORIG')
-                print('Orig ind-first_done: ', ind_first_done)
+            #if padding_mask.any().item():
+            #    print('ORIG ORIG')
+            #    print('Orig ind-first_done: ', ind_first_done)
+            #    print('inputsDONE BEFORE: ', inputs['done'])
 
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
-            if padding_mask.any().item():
-                print('Orig inputs done: ', inputs['done'])
+            #if padding_mask.any().item():
+            #    print('inputsDone AFTER: ', inputs['done'])
+            #    print('Orig inputs done: ', inputs['done'])
             #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
 
         padding_mask = padding_mask.unsqueeze(0)
