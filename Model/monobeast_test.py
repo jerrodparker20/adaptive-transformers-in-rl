@@ -64,7 +64,7 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
-parser.add_argument("--chunk_size", default=80, type=int,
+parser.add_argument("--chunk_size", default=100, type=int,
                     help="Size of chunks to chop batch into")
 
 # This is by default true in our case
@@ -185,6 +185,7 @@ def act(
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
+        env_output['done'] = torch.tensor([[0]],dtype=torch.uint8)
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
@@ -212,7 +213,6 @@ def act(
             while t < flags.unroll_length and not env_output['done'].item():
             # for t in range(flags.unroll_length):
                 timings.reset()
-
                 #REmoved since never this will never be true (MOVED TO AFTER FOR LOOP)
                 #if env_output['done'].item():
                 #    mems = None
@@ -226,6 +226,8 @@ def act(
                 repeat_times = torch.randint(low=1, high=flags.action_repeat+1, size=(1,)).item()
                 for el in range(repeat_times):
                     env_output = env.step(agent_output["action"])
+                    if env_output['done'].item():
+                        break
 
                 timings.time("step")
 
@@ -246,7 +248,9 @@ def act(
 
             if t != flags.unroll_length:
                 #TODO I checked and seems good but Shakti can you check as well?
+                #TODO: Does this still work now that inputs['done'] not getting changed behind scenes from rpevious bug?
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
+
 
             full_queue.put(index)
 
@@ -328,10 +332,19 @@ def learn(
             mini_batch = {key: batch[key][i:i+flags.chunk_size] for key in batch if key != 'len_traj'}
             #Note that initial agent state isn't used by transformer (I think this is hidden state)
             #Will need to change if want to use this with LSTM
+
+            #TODO : Need to change batch->minibatch (batch name gets overwritten)
+            tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
+
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
             #Here mem_padding is same as "batch" padding for this iteration so can use
             #for masking loss
+
+            #if mini_batch["done"].any().item():
+            #    print('Indfirstdone: ',ind_first_done)
+            #    print('miniBATCH DONE: ', mini_batch["done"])
+            #    print('Mem padding: ', mem_padding)
 
             # Take final value function slice for bootstrapping.
             # this is the final value from this trajectory
@@ -342,23 +355,23 @@ def learn(
                 bootstrap_value = learner_outputs["baseline"][-1]
 
             # Move from obs[t] -> action[t] to action[t] -> obs[t].
-            batch = {key: tensor[1:] for key, tensor in batch.items()}
+            mini_batch = {key: tensor[1:] for key, tensor in mini_batch.items()}
             learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
 
             #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
 
-            rewards = batch["reward"]
+            rewards = mini_batch["reward"]
             if flags.reward_clipping == "abs_one":
                 clipped_rewards = torch.clamp(rewards, -1, 1)
             elif flags.reward_clipping == "none":
                 clipped_rewards = rewards
 
-            discounts = (~batch["done"]).float() * flags.discounting
+            discounts = (~mini_batch["done"]).float() * flags.discounting
 
             vtrace_returns = vtrace.from_logits(
-                behavior_policy_logits=batch["policy_logits"],
+                behavior_policy_logits=mini_batch["policy_logits"],
                 target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
-                actions=batch["action"],
+                actions=mini_batch["action"],
                 discounts=discounts,
                 rewards=clipped_rewards,
                 values=learner_outputs["baseline"],
@@ -374,7 +387,7 @@ def learn(
 
             pg_loss = compute_policy_gradient_loss(
                 learner_outputs["policy_logits"],
-                batch["action"],
+                mini_batch["action"],
                 vtrace_returns.pg_advantages,
                 pad_mask
             )
@@ -389,23 +402,24 @@ def learn(
 
             total_loss = pg_loss + baseline_loss + entropy_loss
 
-            rows_to_use = []
-            cols_to_use = []
-            for i,val in enumerate(ind_first_done):
-                if val != -1:
-                    rows_to_use.append(val)
-                    cols_to_use.append(i)
-
-            tmp_mask = torch.zeros_like(batch["done"]).bool()
+            #tmp_mask is defined above
             if ind_first_done is not None:
-                tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
-                #if batch["done"].any().item():
-                #    print('TMP MASK: ',tmp_mask)
-                #    print('BATCH DONE: ', batch["done"])
-                #    print()
+                rows_to_use = []
+                cols_to_use = []
+                for i, val in enumerate(ind_first_done):
+                    if val != -1:
+                        rows_to_use.append(val)
+                        cols_to_use.append(i)
 
-            #episode_returns = batch["episode_return"][batch["done"]]
-            episode_returns = batch["episode_return"][tmp_mask]
+                tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
+                tmp_mask = tmp_mask[1:] #This is how they initially had it so will keep like this
+                #if mini_batch["done"].any().item():
+                #    print('TMP MASK: ',tmp_mask)
+                #    print('BATCH DONE: ', mini_batch["done"])
+                #    print('shape1: {}, shape2: {}'.format(tmp_mask.shape, mini_batch['done'].shape))
+
+            #episode_returns = mini_batch["episode_return"][mini_batch["done"]]
+            episode_returns = mini_batch["episode_return"][tmp_mask]
 
             stats = {
                 "episode_returns": tuple(episode_returns.cpu().numpy()),
@@ -943,6 +957,8 @@ class AtariNet(nn.Module):
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
+        #print('inputs: ', inputs)
+        #print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
@@ -952,13 +968,18 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-        padding_mask = inputs['done']
+        padding_mask = torch.clone(inputs['done'])
+
         ind_first_done = None
         if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
-            ind_first_done = padding_mask.long().argmin(0)+1 #will be index of first 1 in each column
-            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 #choosing -1 helps in learn function
+            # this block just tries to push the dones one position down so that the loss calculation does account
+            # for that step and not ignores it as mask
+            ind_first_done = padding_mask.long().argmin(0)+1 # will be index of first 1 in each column
+            orig_first_row = torch.clone(padding_mask[0,:])
+            ind_first_done[padding_mask[0,:]==1] = 0 # If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 # choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
-            #print('ALL IS FALSE: {}, shape: {}'.format(padding_mask.any().item(), padding_mask.shape ))
+            padding_mask[0, :] = orig_first_row
 
         padding_mask = padding_mask.unsqueeze(0)
         if not padding_mask.any().item(): #In this case no need for padding_mask
