@@ -21,6 +21,8 @@ import time
 import timeit
 import traceback
 import typing
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 import torch
