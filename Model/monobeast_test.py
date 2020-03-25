@@ -66,6 +66,12 @@ parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 parser.add_argument("--chunk_size", default=100, type=int,
                     help="Size of chunks to chop batch into")
+parser.add_argument('--use_pretrained', action='store_true',
+                    help='use the pretrained model identified by --xpid')
+parser.add_argument('--action_repeat', default=1, type=int,
+                    help='number of times to repeat an action = randint(low=1, high=action_repeat+1)')
+parser.add_argument('--stats_episodes', default=100, type=int,
+                    help='report the mean episode returns of the last n episodes')
 
 # This is by default true in our case
 # parser.add_argument("--use_lstm", action="store_true",
@@ -117,12 +123,6 @@ parser.add_argument('--max_step', type=int, default=100000,
                     help='upper epoch limit')
 parser.add_argument('--eta_min', type=float, default=0.0,
                     help='min learning rate for cosine scheduler')
-
-parser.add_argument('--use_pretrained', action='store_true',
-                    help='use the pretrained model identified by --xpid')
-
-parser.add_argument('--action_repeat', default=1, type=int,
-                    help='number of times to repeat an action = randint(low=1, high=action_repeat+1)')
 
 # yapf: enable
 
@@ -709,6 +709,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     timer = timeit.default_timer
     try:
         last_checkpoint_time = timer()
+        last_n_episode_returns = torch.zeros((flags.stats_episodes))
+        curr_index = -1
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
@@ -719,10 +721,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 last_checkpoint_time = timer()
 
             sps = (step - start_step) / (timer() - start_time)
-            if stats.get("episode_returns", None):
+            episode_returns = stats.get("episode_returns", None)
+            if episode_returns:
                 mean_return = (
                     "Return per episode: %.1f. " % stats["mean_episode_return"]
                 )
+                for el in episode_returns:
+                    last_n_episode_returns[(curr_index+1)%flags.stats_episodes] = el
+                    curr_index += 1
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
@@ -737,10 +743,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             #     best_val_loss = val_loss
 
             logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
+                "Steps %i @ %.1f SPS. Loss %f. Last %i episode returns %.2f %sStats:\n%s",
                 step,
                 sps,
                 total_loss,
+                flags.stats_episodes,
+                last_n_episode_returns.mean(),
                 mean_return,
                 pprint.pformat(stats),
             )
