@@ -923,7 +923,7 @@ class AtariNet(nn.Module):
 
         # Fully connected layer.
         # Changed the FC output to match the transformer output which should be divisible by number of heads
-        self.fc = nn.Linear(3872, 256 - num_actions - 1)
+        self.fc = nn.Linear(3456, 256 - num_actions - 1)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
@@ -965,6 +965,7 @@ class AtariNet(nn.Module):
             x += res_input
         x = F.relu(x)
         x = x.view(T * B, -1)
+        # print('x shape : ',x.shape)
         x = F.relu(self.fc(x))
 
         # print('inputs: ', inputs)
