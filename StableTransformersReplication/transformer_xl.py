@@ -138,8 +138,6 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
-        # TODO DEBUG, Why dec_inp2 used in the comment above?
-        # TODO : Changed dec_inp2 to dec_inp
         dec_inp2 = self.layer_norm1(dec_inp)
         dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
                                 attn_mask=dec_attn_mask,
@@ -300,9 +298,14 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
             if attn_mask.dim() == 2:
                 attn_score = attn_score.float().masked_fill(
                     attn_mask[None,:,:,None], -float('inf')).type_as(attn_score)
-            elif attn_mask.dim() == 3:
+            elif attn_mask.dim() == 3: #THIS IS WHAT IS Usually executed
+                #print('Attentionscore shape: ',attn_score.shape)
+                #print('MASK SHAPE: ', attn_mask[:,:,:,None].shape)
+                #print('MASK EL 1: ', attn_mask[:,:,0])
                 attn_score = attn_score.float().masked_fill(
                     attn_mask[:,:,:,None], -float('inf')).type_as(attn_score)
+
+        #print('ATTENTION SCORE: ', attn_score)
 
         # [qlen x klen x bsz x n_head]
         attn_prob = F.softmax(attn_score, dim=1)
@@ -429,15 +432,9 @@ class MemTransformerLM(nn.Module):
     # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
     # that of dec_input, which is unrolled length = query length and batch_size
     # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
-    def _forward(self, obs_emb, mems=None):
-        # print('from txl433 ',obs_emb.shape)
-        qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
-        # TODO : In our case the obs_emb is 3 dimensional, so need an additional holder
+    def _forward(self, obs_emb, padding_mask, mems=None):
 
-        # Changed, this next line already has the input from the embedding of monobeast.
-        # So we dont need this line at all, we can replace it with the already computed output
-        # obs_emb = self.state_emb(dec_inp)
-        #print('MEMS: ',mems)
+        qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
 
         if mems is not None:
             mlen = mems[0].size(0)
@@ -447,20 +444,24 @@ class MemTransformerLM(nn.Module):
         # mlen = mems[0].size(0) if mems is not None else 0
 
         klen = mlen + qlen
-        if self.same_length: #DONT THINK WE WANT SAME LENGTH (I think this just makes each token have same attention span)
-            all_ones = obs_emb.new_ones(qlen, klen)
-            mask_len = klen - self.mem_len
-            if mask_len > 0:
-                mask_shift_len = qlen - mask_len
-            else:
-                mask_shift_len = qlen
-            dec_attn_mask = (torch.triu(all_ones, 1+mlen)
-                             + torch.tril(all_ones, -mask_shift_len)).bool()[:, :, None] # -1
-                            # changed to .bool() from .byte() due to Depreciation warning
-        else:
-            dec_attn_mask = torch.triu(
-                obs_emb.new_ones(qlen, klen), diagonal=1+mlen).bool()[:,:,None]
-                # changed to .bool() from .byte() due to Depreciation warning
+
+        # create the mask taking in consideration the mlen as well. All memory should be attended by the first query
+        dec_attn_mask = torch.triu(
+            obs_emb.new_ones(qlen, klen), diagonal=1+mlen).bool()[:,:,None]
+
+        # TODO: Possibly make this more efficient (check how much things slow down)
+        # This part only runs when calling model in "learn" since in "act" we will
+        # never need padding
+        if not (padding_mask is None):
+            # concat the memory padding along with the padding_mask
+            dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
+            dec_attn_mask = dec_attn_mask | padding_mask
+            #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
+            #want the mlen diagonal to be 0's so that each query can attend
+            #to itself
+            dec_attn_mask[range(qlen), range(mlen, klen), :] = False
+            #print('AFTER: ', dec_attn_mask[:,:,0])
+            #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
         pos_seq = torch.arange(klen-1, -1, -1.0, device=obs_emb.device,
@@ -492,42 +493,30 @@ class MemTransformerLM(nn.Module):
 
         return core_out, new_mems
 
-    # TODO : Removed target from here as we just would give the transformer output
-    #       without considering it as an autoregressive model
-    # def forward(self, data, target, *mems):
-    # TODO: Replaced *mems with mems, are there any problems because of this?
-    def forward(self, data, mems):
-        # nn.DataParallel does not allow size(0) tensors to be broadcasted.
-        # So, have to initialize size(0) mems inside the model forward.
-        # Moreover, have to return new_mems to allow nn.DataParallel to piece
-        # them together.
+
+    def forward(self, data, mems, padding_mask, mem_padding):
+        #padding_mask should be shape 1 X (mlen+qlen) X batch_size,
+        #which we apply row wise
 
         if not mems:
             # print('INITIALIZED MEMS')
             mems = self.init_mems()
 
-        # tgt_len = target.size(0)
-        hidden, new_mems = self._forward(data, mems=mems)
+        #Concatenate mem_padding and padding_mask (slight modifications if None)
+        padding_mask2 = mem_padding
+        if padding_mask2 is None:
+            padding_mask2 = padding_mask
+        elif padding_mask is not None:
+            padding_mask2 = torch.cat([mem_padding, padding_mask], dim=1)
 
-        # TODO : I dont think we need to look back here as there is no prediction of sorts
-        #       happening. We can instead just take the hidden output and push it to the
-        #       2 MLP which are learning the policy
-        # pred_hid = hidden[-tgt_len:]
-        #print("HIDDEN SHAPE: ", hidden.shape)
-        # TODO : DEBUG Removed the hidden[-1] since for the learner model this was coming out as (81, 4, 512),
-        #       and once you do hidden[-1] all you're returning is (1, 4, 512) which the policy_logit is not able
-        #       to reshape. We want predictions at all timesteps, and not just the last step. So pass all the 81 timestep
-        #       hidden status.
-        # pred_hid = hidden[-1]
-        pred_hid = hidden
-        # TODO : Check if this should be -1 or the entire hidden itself?
+        if mem_padding is not None and padding_mask is not None:
+            print('Adding orig: ', padding_mask[:,:,0])
+            print('mem_padding: ', mem_padding[:,:,0])
+            print('Result: ', padding_mask2[:,:,0])
 
-        # TODO : Jerrod : NEED TO CHANGE THIS (ADD MLP that maps to correct # actions
-        # TODO : Shakti : I dont think so since this output will be succeeded by 2 MLPs in
-        #               monobeast_test.py, one will map it to num_actions, another to a value.
-        #               What do you think?
-        # return F.softmax(pred_hid)
-        return pred_hid, new_mems
+        hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
+
+        return hidden, new_mems
 
 
 if __name__ == '__main__':

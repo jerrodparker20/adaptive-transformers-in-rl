@@ -512,17 +512,6 @@ actor_processes = []
 free_queue = queue.Queue()
 full_queue = queue.Queue()
 
-actor = act(
-            flags,
-            0,
-            free_queue,
-            full_queue,
-            model,
-            buffers,
-            initial_agent_state_buffers,
-        )
-actor_processes.append(actor)
-
 # for i in range(flags.num_actors):
 #     actor = ctx.Process(
 #         target=act,
@@ -598,6 +587,18 @@ def batch_and_learn(i, lock=threading.Lock()):
 
 for m in range(flags.num_buffers):
     free_queue.put(m)
+
+# In[]:
+actor = act(
+            flags,
+            0,
+            free_queue,
+            full_queue,
+            model,
+            buffers,
+            initial_agent_state_buffers,
+        )
+actor_processes.append(actor)
 
 threads = []
 thread = batch_and_learn(0)

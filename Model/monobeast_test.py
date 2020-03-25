@@ -64,6 +64,14 @@ parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=in
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
+parser.add_argument("--chunk_size", default=100, type=int,
+                    help="Size of chunks to chop batch into")
+parser.add_argument('--use_pretrained', action='store_true',
+                    help='use the pretrained model identified by --xpid')
+parser.add_argument('--action_repeat', default=4, type=int,
+                    help='number of times to repeat an action = randint(low=2, high=action_repeat+1), default=4')
+parser.add_argument('--stats_episodes', default=100, type=int,
+                    help='report the mean episode returns of the last n episodes')
 
 # This is by default true in our case
 # parser.add_argument("--use_lstm", action="store_true",
@@ -116,11 +124,7 @@ parser.add_argument('--max_step', type=int, default=100000,
 parser.add_argument('--eta_min', type=float, default=0.0,
                     help='min learning rate for cosine scheduler')
 
-parser.add_argument('--use_pretrained', action='store_true',
-                    help='use the pretrained model identified by --xpid')
-
 # yapf: enable
-
 
 logging.basicConfig(
     format=(
@@ -132,24 +136,34 @@ logging.basicConfig(
 Buffers = typing.Dict[str, typing.List[torch.Tensor]]
 
 
-def compute_baseline_loss(advantages):
+def compute_baseline_loss(advantages, padding_mask):
+    if padding_mask is not None:
+        advantages = advantages * padding_mask
     return 0.5 * torch.sum(advantages ** 2)
 
-
-def compute_entropy_loss(logits):
+#padding_mask has 0's wherever padding should mask the logits
+def compute_entropy_loss(logits, padding_mask):
     """Return the entropy loss, i.e., the negative entropy of the policy."""
     policy = F.softmax(logits, dim=-1)
     log_policy = F.log_softmax(logits, dim=-1)
+
+    if padding_mask is not None:
+        #print('log_policyshape: ', log_policy.shape)
+        #print('padding mask: ', padding_mask.shape)
+        log_policy = log_policy * padding_mask.unsqueeze(2)
+
     return torch.sum(policy * log_policy)
 
 
-def compute_policy_gradient_loss(logits, actions, advantages):
+def compute_policy_gradient_loss(logits, actions, advantages, padding_mask):
     cross_entropy = F.nll_loss(
         F.log_softmax(torch.flatten(logits, 0, 1), dim=-1),
         target=torch.flatten(actions, 0, 1),
         reduction="none",
     )
     cross_entropy = cross_entropy.view_as(advantages)
+    if padding_mask is not None:
+        cross_entropy = cross_entropy * padding_mask
     return torch.sum(cross_entropy * advantages.detach())
 
 
@@ -171,17 +185,20 @@ def act(
         gym_env.seed(seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
+        env_output['done'] = torch.tensor([[0]],dtype=torch.uint8)
+
         agent_state = model.initial_state(batch_size=1)
-
-        # TODO DEBUG : negative probability coming up here
-        # print('Env output shape 1: ',env_output['frame'].shape)
-        # print('AGENT STATE: ', agent_state)
-
-        agent_output, unused_state, mems = model(env_output, agent_state, mems=None)
+        mems, mem_padding = None, None
+        agent_output, unused_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
         while True:
             index = free_queue.get()
             if index is None:
                 break
+
+            # explicitly make done False to allow the loop to run
+            #Don't need to set 'done' to true since now take step out of done state
+            #when do arrive at 'done'
+            #env_output['done'] = torch.tensor([0], dtype=torch.uint8)
 
             # Write old rollout end.
             for key in env_output:
@@ -191,21 +208,26 @@ def act(
             for i, tensor in enumerate(agent_state):
                 initial_agent_state_buffers[index][i][...] = tensor
 
-            # Do new rollout.
-            for t in range(flags.unroll_length):
+            # Do one new rollout, untill flags.unroll_length
+            t = 0
+            while t < flags.unroll_length and not env_output['done'].item():
+            # for t in range(flags.unroll_length):
                 timings.reset()
+                #REmoved since never this will never be true (MOVED TO AFTER FOR LOOP)
+                #if env_output['done'].item():
+                #    mems = None
 
-                if env_output['done'].item():
-                    mems = None
                 with torch.no_grad():
-                    #HERE IS WHY B=1, T=1
-                    # print('Env output shape: ',env_output['frame'].shape)
-                    # print('ACTING')
-                    agent_output, agent_state, mems = model(env_output, agent_state, mems)
+                    agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
 
                 timings.time("model")
 
-                env_output = env.step(agent_output["action"])
+                #TODO: can this be done more efficiently?
+                repeat_times = torch.randint(low=2, high=flags.action_repeat+1, size=(1,)).item()
+                for el in range(repeat_times):
+                    env_output = env.step(agent_output["action"])
+                    if env_output['done'].item():
+                        break
 
                 timings.time("step")
 
@@ -215,6 +237,21 @@ def act(
                     buffers[key][index][t + 1, ...] = agent_output[key]
 
                 timings.time("write")
+                t += 1
+
+            if env_output['done'].item():
+                mems = None
+                #Take arbitrary step to reset environment
+                env_output = env.step(torch.tensor([2]))
+
+            buffers['len_traj'][index][0] = t
+
+            if t != flags.unroll_length:
+                #TODO I checked and seems good but Shakti can you check as well?
+                #TODO: Does this still work now that inputs['done'] not getting changed behind scenes from rpevious bug?
+                buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
+
+
             full_queue.put(index)
 
         if actor_index == 0:
@@ -241,6 +278,12 @@ def get_batch(
     with lock:
         timings.time("lock")
         indices = [full_queue.get() for _ in range(flags.batch_size)]
+
+        # TODO: Check if emptying full_queue and then readding to it takes very long,
+        #       seems like the only way to ensure a batch of similar length elements
+        # One problem with doing this is that if get a really short trajectory, may never end up
+        # using it. DONT CHANGE THIS FOR NOW.
+
         timings.time("dequeue")
     batch = {
         key: torch.stack([buffers[key][m] for m in indices], dim=1) for key in buffers
@@ -279,80 +322,123 @@ def learn(
         Update the parameters of the central learner,
         copy the parameters of the central learner back to the actors
         """
-        # print('RUNNING MAIN MODEL')
-        # print('MODEL OUTOUT: ', model(batch, initial_agent_state))
-        # print('batch size : ', batch['frame'].size())
 
-        # TODO Next Step: think about chopping the sequences up for attending to long sequences
-        # TODO Next Step: make the actors put only one sequence in one rollout. And then mask the remaining rollout
-        #       positions. And then change the triu in line 461 in TXL
-        # Here entire 81 length sequence is considered as a query, and is autoregressively being attended to the
-        # keys and values of length 81. This sequence length when becomes very large is when we'll need memory to
-        # kick in
-        learner_outputs, unused_state, unused_mems = model(batch, initial_agent_state, mems=None)
+        # TODO: Chop up batch into smaller pieces to run through TXL one at a time (caching previous as memory)
+        # TODO: Change batch function to look for trajectories of similar lengths
+        # TODO: Add in adaptive attention (and think of how things change (for ex no memory))
+        #print({key: batch[key].shape for key in batch})
+        mems, mem_padding = None, None
+        for i in range(0, flags.unroll_length+1, flags.chunk_size):
+            mini_batch = {key: batch[key][i:i+flags.chunk_size] for key in batch if key != 'len_traj'}
+            #Note that initial agent state isn't used by transformer (I think this is hidden state)
+            #Will need to change if want to use this with LSTM
 
-        # Take final value function slice for bootstrapping.
-        # this is the final value from this trajectory
-        bootstrap_value = learner_outputs["baseline"][-1]
+            #TODO : Need to change batch->minibatch (batch name gets overwritten)
+            tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
+            learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
+                                                                                     mems=mems, mem_padding=mem_padding)
+            #Here mem_padding is same as "batch" padding for this iteration so can use
+            #for masking loss
 
-        # Move from obs[t] -> action[t] to action[t] -> obs[t].
-        batch = {key: tensor[1:] for key, tensor in batch.items()}
-        learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
+            #if mini_batch["done"].any().item():
+            #    print('Indfirstdone: ',ind_first_done)
+            #    print('miniBATCH DONE: ', mini_batch["done"])
+            #    print('Mem padding: ', mem_padding)
 
-        rewards = batch["reward"]
-        if flags.reward_clipping == "abs_one":
-            clipped_rewards = torch.clamp(rewards, -1, 1)
-        elif flags.reward_clipping == "none":
-            clipped_rewards = rewards
+            # Take final value function slice for bootstrapping.
+            # this is the final value from this trajectory
+            if ind_first_done is not None:
+                # B dimensional tensor
+                bootstrap_value = learner_outputs["baseline"][ind_first_done, range(flags.batch_size)]
+            else:
+                bootstrap_value = learner_outputs["baseline"][-1]
 
-        discounts = (~batch["done"]).float() * flags.discounting
+            # Move from obs[t] -> action[t] to action[t] -> obs[t].
+            mini_batch = {key: tensor[1:] for key, tensor in mini_batch.items()}
+            learner_outputs = {key: tensor[:-1] for key, tensor in learner_outputs.items()}
 
-        vtrace_returns = vtrace.from_logits(
-            behavior_policy_logits=batch["policy_logits"],
-            target_policy_logits=learner_outputs["policy_logits"],
-            actions=batch["action"],
-            discounts=discounts,
-            rewards=clipped_rewards,
-            values=learner_outputs["baseline"],
-            bootstrap_value=bootstrap_value,
-        )
+            #Using learner_outputs to predict batch since batch is always one ahead of learner_outputs?
 
-        # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
-        #                   to do this efficiently
-        pg_loss = compute_policy_gradient_loss(
-            learner_outputs["policy_logits"],
-            batch["action"],
-            vtrace_returns.pg_advantages,
-        )
-        baseline_loss = flags.baseline_cost * compute_baseline_loss(
-            vtrace_returns.vs - learner_outputs["baseline"]
-        )
-        entropy_loss = flags.entropy_cost * compute_entropy_loss(
-            learner_outputs["policy_logits"]
-        )
+            rewards = mini_batch["reward"]
+            if flags.reward_clipping == "abs_one":
+                clipped_rewards = torch.clamp(rewards, -1, 1)
+            elif flags.reward_clipping == "none":
+                clipped_rewards = rewards
 
-        total_loss = pg_loss + baseline_loss + entropy_loss
+            discounts = (~mini_batch["done"]).float() * flags.discounting
 
-        episode_returns = batch["episode_return"][batch["done"]]
-        stats = {
-            "episode_returns": tuple(episode_returns.cpu().numpy()),
-            "mean_episode_return": torch.mean(episode_returns).item(),
-            "total_loss": total_loss.item(),
-            "pg_loss": pg_loss.item(),
-            "baseline_loss": baseline_loss.item(),
-            "entropy_loss": entropy_loss.item(),
-        }
+            vtrace_returns = vtrace.from_logits(
+                behavior_policy_logits=mini_batch["policy_logits"],
+                target_policy_logits=learner_outputs["policy_logits"], #WHY IS THIS THE TARGET?
+                actions=mini_batch["action"],
+                discounts=discounts,
+                rewards=clipped_rewards,
+                values=learner_outputs["baseline"],
+                bootstrap_value=bootstrap_value,
+            )
 
-        optimizer.zero_grad()
-        total_loss.backward()
-        if flags.fp16:
-            optimizer.clip_master_grads(flags.grad_norm_clipping)
-        else:
-            nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
-        optimizer.step()
-        # scheduler is being stepped in the lock of batch_and_learn itself
-        # scheduler.step()
+            # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
+            #                   to do this efficiently
+            # Advantages are [rollout_len, batch_size]
+
+            # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
+            pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
+
+            pg_loss = compute_policy_gradient_loss(
+                learner_outputs["policy_logits"],
+                mini_batch["action"],
+                vtrace_returns.pg_advantages,
+                pad_mask
+            )
+            baseline_loss = flags.baseline_cost * compute_baseline_loss(
+                vtrace_returns.vs - learner_outputs["baseline"],
+                pad_mask
+            )
+            entropy_loss = flags.entropy_cost * compute_entropy_loss(
+                learner_outputs["policy_logits"],
+                pad_mask
+            )
+
+            total_loss = pg_loss + baseline_loss + entropy_loss
+
+            #tmp_mask is defined above
+            if ind_first_done is not None:
+                rows_to_use = []
+                cols_to_use = []
+                for i, val in enumerate(ind_first_done):
+                    if val != -1:
+                        rows_to_use.append(val)
+                        cols_to_use.append(i)
+
+                tmp_mask[rows_to_use, cols_to_use] = True #NOT RIGHT FOR COLS THAT DIDNT FINISH
+                tmp_mask = tmp_mask[1:] #This is how they initially had it so will keep like this
+                #if mini_batch["done"].any().item():
+                #    print('TMP MASK: ',tmp_mask)
+                #    print('BATCH DONE: ', mini_batch["done"])
+                #    print('shape1: {}, shape2: {}'.format(tmp_mask.shape, mini_batch['done'].shape))
+
+            #episode_returns = mini_batch["episode_return"][mini_batch["done"]]
+            episode_returns = mini_batch["episode_return"][tmp_mask]
+
+            stats = {
+                "episode_returns": tuple(episode_returns.cpu().numpy()),
+                "mean_episode_return": torch.mean(episode_returns).item(),
+                "total_loss": total_loss.item(),
+                "pg_loss": pg_loss.item(),
+                "baseline_loss": baseline_loss.item(),
+                "entropy_loss": entropy_loss.item(),
+            }
+
+            optimizer.zero_grad()
+            total_loss.backward()
+            if flags.fp16:
+                optimizer.clip_master_grads(flags.grad_norm_clipping)
+            else:
+                nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
+            optimizer.step()
+            # scheduler is being stepped in the lock of batch_and_learn itself
+            # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
         return stats
@@ -370,6 +456,7 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         baseline=dict(size=(T + 1,), dtype=torch.float32),
         last_action=dict(size=(T + 1,), dtype=torch.int64),
         action=dict(size=(T + 1,), dtype=torch.int64),
+        len_traj=dict(size=(1,), dtype=torch.int32) #is min(length til trajectory is done, T)
     )
     buffers: Buffers = {key: [] for key in specs}
     for _ in range(flags.num_buffers):
@@ -622,6 +709,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     timer = timeit.default_timer
     try:
         last_checkpoint_time = timer()
+        last_n_episode_returns = torch.zeros((flags.stats_episodes))
+        curr_index = -1
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
@@ -632,10 +721,17 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 last_checkpoint_time = timer()
 
             sps = (step - start_step) / (timer() - start_time)
-            if stats.get("episode_returns", None):
+            episode_returns = stats.get("episode_returns", None)
+            if episode_returns:
                 mean_return = (
                     "Return per episode: %.1f. " % stats["mean_episode_return"]
                 )
+                #print(episode_returns)
+                #print(type(episode_returns[0]))
+                #torch.save(episode_returns, './ep_return.pt')
+                for el in episode_returns:
+                    last_n_episode_returns[(curr_index+1)%flags.stats_episodes] = el.item()
+                    curr_index += 1
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
@@ -650,10 +746,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             #     best_val_loss = val_loss
 
             logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
+                "Steps %i @ %.1f SPS. Loss %f. Last %i episode returns %.2f %sStats:\n%s",
                 step,
                 sps,
                 total_loss,
+                flags.stats_episodes,
+                last_n_episode_returns.mean(),
                 mean_return,
                 pprint.pformat(stats),
             )
@@ -692,14 +790,13 @@ def test(flags, num_episodes: int = 10):
     returns = []
 
     mems = None
+    mem_padding = None
     while len(returns) < num_episodes:
         if flags.mode == "test_render":
             env.gym_env.render()
 
-        # TODO: Check that this call to model is correct
-        agent_outputs, core_state, mems = model(observation, mems=mems)
-        policy_outputs, _ = agent_outputs
-        observation = env.step(policy_outputs["action"])
+        agent_outputs, core_state, mems, mem_padding, ind_first_done = model(observation, mems=mems, mem_padding=mem_padding)
+        observation = env.step(agent_outputs["action"])
         if observation["done"].item():
             returns.append(observation["episode_return"].item())
             logging.info(
@@ -852,14 +949,13 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=(), mems=None):
+    def forward(self, inputs, core_state=(), mems=None, mem_padding=None):
 
         x = inputs["frame"]
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
-        
-        res_input = None
+
         for i, fconv in enumerate(self.feat_convs):
             x = fconv(x)
             res_input = x
@@ -868,50 +964,63 @@ class AtariNet(nn.Module):
             res_input = x
             x = self.resnet2[i](x)
             x += res_input
-        
         x = F.relu(x)
-        x = x.view(T * B, -1)  #WHY FLATTEN HERE
+        x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
+        #print('inputs: ', inputs)
+        #print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
             inputs["last_action"].view(T * B), self.num_actions
         ).float()
 
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-        ###############################################################transformer
-        # if self.use_lstm:
-        #print('CoreInput shape: ', core_input.shape)
 
-        #BE CAREFUL WITH THIS WAY OF RESHAPING (should transpose instead)
         core_input = core_input.view(T, B, -1)
-        core_output_list = []
-        notdone = (~inputs["done"]).float()
 
-        # TODO : We need to pass everything at once to the transformer, and not
-        #         iterate over each timestep. Check how this should be done here
+        padding_mask = torch.clone(inputs['done'])
 
-        # TODO : seems like core_input does have all the timesteps into it since
-        #       an unbind is being called on it. It should be safe to pass core_input
-        #       directly to the transformer. Check dimensions here
-        # TODO : the memory has been put as None here, this will be changed in the upcoming codes
+        ind_first_done = None
+        if padding_mask.dim() > 1: #This only seems to not happen on first state ever in env.initialize()
+            # this block just tries to push the dones one position down so that the loss calculation does account
+            # for that step and not ignores it as mask
+            ind_first_done = padding_mask.long().argmin(0)+1 # will be index of first 1 in each column
+            orig_first_row = torch.clone(padding_mask[0,:])
+            ind_first_done[padding_mask[0,:]==1] = 0 # If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+            ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1 # choosing -1 helps in learn function
+            padding_mask[ind_first_done, range(B)] = False
+            padding_mask[0, :] = orig_first_row
 
-        """TODO : Need to include a for loop here after core_input.unbind()"""
-        core_output, mems = self.core(core_input, mems)   # core_input is of shape (T, B, ...)
+        padding_mask = padding_mask.unsqueeze(0)
+        if not padding_mask.any().item(): #In this case no need for padding_mask
+            padding_mask = None
+
+        core_output, mems = self.core(core_input, mems, padding_mask=padding_mask, mem_padding=mem_padding)   # core_input is of shape (T, B, ...)
                                               # core_output is (B, ...)
-        # print('CORE OUTPUT: ',core_output[0,:10])
-        # print('Core output shpae: ',core_output.shape)
-        # TODO : The current memory is put as None since I've instantiated TransformerLM with
-        #  mem_len = 0 above
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
 
-        # print('POLICY SHAPE: ',policy_logits.shape)
         policy_logits = policy_logits.reshape(T*B, self.num_actions)
-        # print('TMP : {} Original : {}'.format(policy_logits_tmp[:3, :], policy_logits[:3, :3, :]))
+        # # if policy_logits.shape[0] == 32 and policy_logits.shape[1] == 6:
+        # if not torch.all(policy_logits == policy_logits).item():
+        #     # nans only come when the learner_model calls this forward
+        #     print('from monobeast 921\n', policy_logits)
+        #     print('core output : ',core_output.shape, '\n', core_output)
+        #     print('core input : \n', core_input)
+        #     print('mask : \n', padding_mask)
+        #     print('mems : \n', mems)
+        #     torch.save(core_input, './core_input.pt')
+        #     torch.save(padding_mask, './padding_mask.pt')
+        #     torch.save(mems, './mems.pt')
+
         if self.training:
-            # Sample from multinomial distribution for explorationx
+            # Sample from multinomial distribution for exploration
+            # if not (padding_mask is None) and padding_mask.shape[1] > 1:
+            #     print('Padding shape: {}, logits shape: {}'.format(padding_mask.shape, policy_logits.shape))
+            #     print('PADDING: ', padding_mask)
+            #     print("LOGITS: ", policy_logits)
             action = torch.multinomial(F.softmax(policy_logits, dim=1), num_samples=1)
         else:
             # Don't sample when testing.
@@ -920,12 +1029,11 @@ class AtariNet(nn.Module):
         policy_logits = policy_logits.view(T, B, self.num_actions)
         baseline = baseline.view(T, B)
 
-        # print('policy logits : {} and T : {} B : {} action : {}'.format(policy_logits.shape, T, B, action.shape))
         action = action.view(T, B)
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state, mems
+            core_state, mems, padding_mask, ind_first_done
         )
 
 
@@ -953,13 +1061,3 @@ def main(flags):
 if __name__ == "__main__":
     flags = parser.parse_args()
     main(flags)
-
-
-# TODO : Should we have this functinality as well, to load the model if this is not a restart?
-# if args.restart:
-#     if os.path.exists(os.path.join(args.restart_dir, 'optimizer.pt')):
-#         with open(os.path.join(args.restart_dir, 'optimizer.pt'), 'rb') as f:
-#             opt_state_dict = torch.load(f)
-#             optimizer.load_state_dict(opt_state_dict)
-#     else:
-#         print('Optimizer was not saved. Start from scratch.')
