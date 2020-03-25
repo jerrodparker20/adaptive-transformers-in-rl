@@ -726,8 +726,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 mean_return = (
                     "Return per episode: %.1f. " % stats["mean_episode_return"]
                 )
+                #print(episode_returns)
+                #print(type(episode_returns[0]))
+                #torch.save(episode_returns, './ep_return.pt')
                 for el in episode_returns:
-                    last_n_episode_returns[(curr_index+1)%flags.stats_episodes] = el
+                    last_n_episode_returns[(curr_index+1)%flags.stats_episodes] = el.item()
                     curr_index += 1
             else:
                 mean_return = ""
