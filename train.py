@@ -217,7 +217,6 @@ def act(
 
                 timings.time("model")
 
-                # TODO: can this be done more efficiently?
                 repeat_times = torch.randint(low=2, high=flags.action_repeat + 1, size=(1,)).item()
                 for el in range(repeat_times):
                     env_output = env.step(agent_output["action"])
@@ -242,8 +241,7 @@ def act(
             buffers['len_traj'][index][0] = t
 
             if t != flags.unroll_length:
-                # TODO I checked and seems good but Shakti can you check as well?
-                # TODO: Does this still work now that inputs['done'] not getting changed behind scenes from rpevious bug?
+                # TODO Is there a potential bug here
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
             full_queue.put(index)
@@ -543,8 +541,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         flags.device = torch.device("cpu")
 
     # DMLAB CHANGES
-    env = create_env(flags.level_name, 1)
-    # TODO HIGH : Try avoiding initial() call here at all cost
+    env = create_env(flags.level_name)
     """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
     model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET))
     buffers = create_buffers(flags, env._observation().shape, model.num_actions)
