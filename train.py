@@ -175,9 +175,9 @@ def act(
         logging.info("Actor %i started.", actor_index)
         timings = prof.Timings()  # Keep track of how fast things are.
 
-        gym_env = create_env(level_name)
         seed = actor_index ^ int.from_bytes(os.urandom(4), byteorder="little")
-        gym_env.seed(seed)
+        # gym_env.seed(seed)
+        gym_env = create_env(level_name, seed)
         env = environment.Environment(gym_env)
         env_output = env.initial()
         env_output['done'] = torch.tensor([[0]], dtype=torch.uint8)
