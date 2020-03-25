@@ -2,6 +2,12 @@
 # The vision network and the LSTM were replaced with our gated transformerXL architectures
 # A more efficient form of batching was done to feed into the learner
 
+'''
+This file is for running on DMLab
+
+TODO: Want to be able to run both DMLab and Atari (shouldn't be very large changes)
+'''
+
 
 import sys, os
 
@@ -97,7 +103,7 @@ parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
 parser.add_argument('--optim', default='RMSProp', type=str,
                     choices=['adam', 'sgd', 'adagrad, RMSProp'],
                     help='optimizer to use.')
-parser.add_argument('--scheduler', default='torchLR', type=str,
+parser.add_argument('--scheduler', default='cosine', type=str,
                     choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
                     help='lr scheduler to use.')
 parser.add_argument('--warmup_step', type=int, default=0,
@@ -112,8 +118,6 @@ parser.add_argument('--static-loss-scale', type=float, default=1,
 parser.add_argument('--dynamic-loss-scale', action='store_true',
                     help='Use dynamic loss scaling.  If supplied, this argument'
                          ' supersedes --static-loss-scale.')
-parser.add_argument('--max_step', type=int, default=100000,
-                    help='upper epoch limit')
 parser.add_argument('--eta_min', type=float, default=0.0,
                     help='min learning rate for cosine scheduler')
 
@@ -430,7 +434,6 @@ def learn(
                 nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
             optimizer.step()
             # scheduler is being stepped in the lock of batch_and_learn itself
-            # scheduler.step()
 
         actor_model.load_state_dict(model.state_dict())
         return stats
@@ -475,7 +478,7 @@ def get_scheduler(flags, optimizer):
         # because in previous versions eta_min is default to 0
         # rather than the default value of lr_min 1e-6
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
-                                                               flags.max_step, eta_min=flags.eta_min)
+                                                               flags.total_steps, eta_min=flags.eta_min)
     elif flags.scheduler == 'inv_sqrt':
         # originally used for Transformer (in Attention is all you need)
         def lr_lambda(step):
@@ -502,7 +505,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     # load the previous config if use_pretrained is true
     if flags.use_pretrained:
         logging.info('Using Pretrained Model')
-
+        #TODO Check if this loading below works properly
         class Bunch(object):
             def __init__(self, adict):
                 self.__dict__.update(adict)
@@ -597,20 +600,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             weight_decay=flags.weight_decay
         )
 
-    try:
-        from apex.fp16_utils import FP16_Optimizer
-    except:
-        print('WARNING: apex not installed, ignoring --fp16 option')
-        flags.fp16 = False
-
-    if not flags.disable_cuda and flags.fp16:
-        # If args.dynamic_loss_scale is False, static_loss_scale will be used.
-        # If args.dynamic_loss_scale is True, it will take precedence over static_loss_scale.
-        optimizer = FP16_Optimizer(optimizer,
-                                   static_loss_scale=flags.static_loss_scale,
-                                   dynamic_loss_scale=flags.dynamic_loss_scale,
-                                   dynamic_loss_args={'init_scale': 2 ** 16})
-
     def lr_lambda(epoch):
         return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
 
@@ -659,14 +648,17 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
-                # TODO : How to perform annealing here exactly, we dont have access to the train_step !
                 if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
                     # linear warmup stage
                     if step < flags.warmup_step:
-                        curr_lr = flags.lr * step / flags.warmup_step
+                        curr_lr = flags.learning_rate * step / flags.warmup_step
                         optimizer.param_groups[0]['lr'] = curr_lr
                     else:
                         if flags.scheduler == 'cosine':
+                            #TODO: Right now number of steps to do depends on T and B, would rather
+                            #Is better to step based on number of non padded entries in the padding mask.
+                            #Can make when we take a step be conditional on the step number (maybe each
+                            #10000 we step or so. 
                             scheduler.step()
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
