@@ -68,8 +68,8 @@ parser.add_argument("--chunk_size", default=100, type=int,
                     help="Size of chunks to chop batch into")
 parser.add_argument('--use_pretrained', action='store_true',
                     help='use the pretrained model identified by --xpid')
-parser.add_argument('--action_repeat', default=1, type=int,
-                    help='number of times to repeat an action = randint(low=1, high=action_repeat+1)')
+parser.add_argument('--action_repeat', default=4, type=int,
+                    help='number of times to repeat an action = randint(low=2, high=action_repeat+1), default=4')
 parser.add_argument('--stats_episodes', default=100, type=int,
                     help='report the mean episode returns of the last n episodes')
 
@@ -223,7 +223,7 @@ def act(
                 timings.time("model")
 
                 #TODO: can this be done more efficiently?
-                repeat_times = torch.randint(low=1, high=flags.action_repeat+1, size=(1,)).item()
+                repeat_times = torch.randint(low=2, high=flags.action_repeat+1, size=(1,)).item()
                 for el in range(repeat_times):
                     env_output = env.step(agent_output["action"])
                     if env_output['done'].item():
