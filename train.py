@@ -69,7 +69,7 @@ parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
-parser.add_argument("--unroll_length", default=80, type=int, metavar="T",
+parser.add_argument("--unroll_length", default=100, type=int, metavar="T",
                     help="The unroll length (time dimension).")
 parser.add_argument("--num_buffers", default=None, type=int,
                     metavar="N", help="Number of shared-memory buffers.")
@@ -82,7 +82,7 @@ parser.add_argument("--chunk_size", default=100, type=int,
 parser.add_argument('--use_pretrained', action='store_true',
                     help='use the pretrained model identified by --xpid')
 parser.add_argument('--action_repeat', default=4, type=int,
-                    help='number of times to repeat an action = randint(low=2, high=action_repeat+1), default=4')
+                    help='number of times to repeat an action, default=4')
 parser.add_argument('--stats_episodes', default=100, type=int,
                     help='report the mean episode returns of the last n episodes')
 
@@ -242,8 +242,9 @@ def act(
 
                 timings.time("model")
 
-                repeat_times = torch.randint(low=2, high=flags.action_repeat + 1, size=(1,)).item()
-                for el in range(repeat_times):
+                # TODO : Check if this probability skipping can compromise granularity
+                # repeat_times = torch.randint(low=2, high=flags.action_repeat + 1, size=(1,)).item()
+                for el in range(flags.action_repeat):
                     env_output = env.step(agent_output["action"])
                     if env_output['done'].item():
                         break

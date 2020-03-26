@@ -165,7 +165,7 @@ ALL_LEVELS = frozenset([
 def _transform_level_returns(level_returns):
   """Converts training level names to test level names."""
   new_level_returns = {}
-  for level_name, returns in level_returns.iteritems():
+  for level_name, returns in level_returns.items():
     new_level_returns[LEVEL_MAPPING.get(level_name, level_name)] = returns
 
   test_set = set(LEVEL_MAPPING.values())
@@ -173,7 +173,7 @@ def _transform_level_returns(level_returns):
   if diff:
     raise ValueError('Missing levels: %s' % list(diff))
 
-  for level_name, returns in new_level_returns.iteritems():
+  for level_name, returns in new_level_returns.items():
     if level_name in test_set:
       if not returns:
         raise ValueError('Missing returns for level: \'%s\': ' % level_name)
