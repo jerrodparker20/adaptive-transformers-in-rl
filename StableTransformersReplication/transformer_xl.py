@@ -419,8 +419,10 @@ class MemTransformerLM(nn.Module):
             end_idx = mlen + max(0, qlen - 0 - self.ext_len) # ext_len looks to usually be 0 (in their experiments anyways
 
             # TODO: I have changed beg_idx to 0 since want to use all memory, may want to change
-            #       this once move to larger environments
-            beg_idx = 0 #max(0, end_idx - self.mem_len)
+            #       this once move to larger environments (THIS HAS NOW BEEN CHANGED)
+
+            #HERE IS THE PROBLEM.
+            beg_idx = max(0, end_idx - self.mem_len)
             for i in range(len(hids)):
 
                 cat = torch.cat([mems[i], hids[i]], dim=0)
@@ -504,16 +506,21 @@ class MemTransformerLM(nn.Module):
 
         #Concatenate mem_padding and padding_mask (slight modifications if None)
         padding_mask2 = mem_padding
+        #print('mem_padding', mem_padding.shape if mem_padding is not None else None)
+        #print('PADDING MASK: ', padding_mask.shape if padding_mask is not None else None)
         if padding_mask2 is None:
             padding_mask2 = padding_mask
         elif padding_mask is not None:
             padding_mask2 = torch.cat([mem_padding, padding_mask], dim=1)
 
+        '''
         if mem_padding is not None and padding_mask is not None:
             print('Adding orig: ', padding_mask[:,:,0])
             print('mem_padding: ', mem_padding[:,:,0])
             print('Result: ', padding_mask2[:,:,0])
-
+            print('DATA shape: ', data.shape)
+            print('mems shape: ', mems[0].shape)
+        '''
         hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
 
         return hidden, new_mems

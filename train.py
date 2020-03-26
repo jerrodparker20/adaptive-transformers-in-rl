@@ -359,12 +359,15 @@ def learn(
             # Note that initial agent state isn't used by transformer (I think this is hidden state)
             # Will need to change if want to use this with LSTM
 
+            if mini_batch['done'].shape[0] != flags.chunk_size:
+                break #This would break around memory padding
+
             #TODO Trim mini_batch if all dones at the end: If everything is done just continue here
             #    CAN DO THIS by looking at buffers['len_traj']
             # For now just say that if more than half the minibatch is done, then continue
             mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
             if mini_batch['done'].sum().item() > mini_batch_size / 2:
-                continue
+                break
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
@@ -991,7 +994,7 @@ class AtariNet(nn.Module):
         # TODO : Change the n_layer=1 to 12
         self.core = MemTransformerLM(n_token=None, n_layer=flags.n_layer, n_head=8, d_head=core_output_size // 8,
                                      d_model=core_output_size, d_inner=flags.d_inner,
-                                     dropout=0.1, dropatt=0.0,                  # TODO : CHeck if tgt_len=None causes any issue
+                                     dropout=0.1, dropatt=0.0, mem_len=flags.chunk_size,  # TODO : CHeck if tgt_len=None causes any issue
                                      use_stable_version=True, use_gate=flags.use_gate)
         self.core.apply(weights_init)
         self.policy = nn.Linear(core_output_size, self.num_actions)
@@ -1037,7 +1040,7 @@ class AtariNet(nn.Module):
 
         core_input = core_input.view(T, B, -1)
 
-        padding_mask = torch.clone(inputs['done'])
+        padding_mask = torch.clone(inputs['done']).bool()
 
         ind_first_done = None
         if padding_mask.dim() > 1:  # This only seems to not happen on first state ever in env.initialize()
@@ -1052,8 +1055,10 @@ class AtariNet(nn.Module):
             padding_mask[0, :] = orig_first_row
 
         padding_mask = padding_mask.unsqueeze(0)
-        if not padding_mask.any().item():  # In this case no need for padding_mask
-            padding_mask = None
+        if padding_mask.shape[1] == 1:
+            padding_mask = None #This means we're in act or test so no need for padding
+        #if not padding_mask.any().item():  # In this case no need for padding_mask
+        #    padding_mask = None
 
         core_output, mems = self.core(core_input, mems, padding_mask=padding_mask,
                                       mem_padding=mem_padding)  # core_input is of shape (T, B, ...)
