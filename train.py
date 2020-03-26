@@ -6,6 +6,8 @@
 This file is for running on DMLab
 
 TODO: Want to be able to run both DMLab and Atari (shouldn't be very large changes)
+TODO: Want to trim off part of chunk if all masked in each element of batch: This may cause issues where we
+      refer to T as the size of this.
 '''
 
 
@@ -108,6 +110,8 @@ parser.add_argument('--scheduler', default='cosine', type=str,
                     help='lr scheduler to use.')
 parser.add_argument('--warmup_step', type=int, default=0,
                     help='upper epoch limit')
+parser.add_argument('--steps_btw_sched_updates', type=int, default=10000,
+                    help='number of steps between scheduler updates')
 parser.add_argument('--decay_rate', type=float, default=0.5,
                     help='decay factor when ReduceLROnPlateau is used')
 parser.add_argument('--lr_min', type=float, default=0.0,
@@ -329,6 +333,8 @@ def learn(
             # Note that initial agent state isn't used by transformer (I think this is hidden state)
             # Will need to change if want to use this with LSTM
 
+            #TODO Trim mini_batch if all dones at the end: If everything is done just continue here
+
             # TODO : Need to change batch->minibatch (batch name gets overwritten)
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
@@ -416,6 +422,8 @@ def learn(
 
             # episode_returns = mini_batch["episode_return"][mini_batch["done"]]
             episode_returns = mini_batch["episode_return"][tmp_mask]
+            mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size()))
+            num_unpadded_steps = (~mem_padding).sum().item() if mem_padding is not None else mini_batch_size
 
             stats = {
                 "episode_returns": tuple(episode_returns.cpu().numpy()),
@@ -424,6 +432,7 @@ def learn(
                 "pg_loss": pg_loss.item(),
                 "baseline_loss": baseline_loss.item(),
                 "entropy_loss": entropy_loss.item(),
+                "num_unpadded_steps": num_unpadded_steps
             }
 
             optimizer.zero_grad()
@@ -619,7 +628,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
     step, stats = 0, {}
-
+    steps_since_sched_update = 0
     if flags.use_pretrained:
         logging.info('Using Pretrained Model -> loading learner_model, optimizer, scheduler states')
         learner_model.load_state_dict(pretrained_model['model_state_dict'])
@@ -628,7 +637,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
-        nonlocal step, stats
+        nonlocal step, stats, steps_since_sched_update
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
@@ -653,13 +662,16 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                     if step < flags.warmup_step:
                         curr_lr = flags.learning_rate * step / flags.warmup_step
                         optimizer.param_groups[0]['lr'] = curr_lr
-                    else:
-                        if flags.scheduler == 'cosine':
-                            #TODO: Right now number of steps to do depends on T and B, would rather
-                            #Is better to step based on number of non padded entries in the padding mask.
-                            #Can make when we take a step be conditional on the step number (maybe each
-                            #10000 we step or so. 
+                    elif flags.scheduler == 'cosine':
+                        #TODO: Right now number of steps to do depends on T and B, which isn't ideal.
+                        #Instead will
+                        #Is better to step based on number of non padded entries in the padding mask.
+                        #Can make when we take a step be conditional on the step number (maybe each
+                        #10000 we step or so.
+                        if steps_since_sched_update >= flags.steps_btw__sched_updates:
                             scheduler.step()
+                            steps_since_sched_update = 0
+
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
 
@@ -667,7 +679,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 to_log.update({k: stats[k] for k in stat_keys})
                 plogger.log(to_log)
                 # print('updating step from {} to {}'.format(step, step+(T*B)))
-                step += T * B
+                step += stats['num_unpadded_steps'] #T * B
+                steps_since_sched_update += stats['num_unpadded_steps']
 
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
@@ -979,8 +992,8 @@ class AtariNet(nn.Module):
             # for that step and not ignores it as mask
             ind_first_done = padding_mask.long().argmin(0) + 1  # will be index of first 1 in each column
             orig_first_row = torch.clone(padding_mask[0, :])
-            ind_first_done[padding_mask[0,
-                           :] == 1] = 0  # If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+            # If there aren't any 0's in the whole inputs['done'] then set ind_first_done to 0
+            ind_first_done[padding_mask[0,:] == 1] = 0
             ind_first_done[ind_first_done >= padding_mask.shape[0]] = -1  # choosing -1 helps in learn function
             padding_mask[ind_first_done, range(B)] = False
             padding_mask[0, :] = orig_first_row
