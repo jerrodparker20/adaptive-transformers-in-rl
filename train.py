@@ -720,11 +720,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                     scheduler.step()
 
                 to_log = dict(step=step)
-                to_log.update({k: stats[k] for k in stat_keys})
+                to_log.update({k: stats.get(k, None) for k in stat_keys})
                 plogger.log(to_log)
                 # print('updating step from {} to {}'.format(step, step+(T*B)))
-                step += stats['num_unpadded_steps'] #T * B
-                steps_since_sched_update += stats['num_unpadded_steps']
+                step += stats.get('num_unpadded_steps', 0) #T * B
+                steps_since_sched_update += stats.get('num_unpadded_steps', 0)
 
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
