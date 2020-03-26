@@ -352,6 +352,10 @@ def learn(
 
             #TODO Trim mini_batch if all dones at the end: If everything is done just continue here
             #    CAN DO THIS by looking at buffers['len_traj']
+            # For now just say that if more than half the minibatch is done, then continue
+            mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
+            if mini_batch['done'].sum().item() > mini_batch_size / 2:
+                continue
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
@@ -439,7 +443,6 @@ def learn(
 
             # episode_returns = mini_batch["episode_return"][mini_batch["done"]]
             episode_returns = mini_batch["episode_return"][tmp_mask]
-            mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
             num_unpadded_steps = (~mem_padding).sum().item() if mem_padding is not None else mini_batch_size
 
             stats = {
