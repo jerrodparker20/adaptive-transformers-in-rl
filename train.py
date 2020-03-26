@@ -354,6 +354,7 @@ def learn(
         # TODO: Add in adaptive attention (and think of how things change (for ex no memory))
         # print({key: batch[key].shape for key in batch})
         mems, mem_padding = None, None
+        stats = {}
         for i in range(0, flags.unroll_length + 1, flags.chunk_size):
             mini_batch = {key: batch[key][i:i + flags.chunk_size] for key in batch if key != 'len_traj'}
             # Note that initial agent state isn't used by transformer (I think this is hidden state)
@@ -761,7 +762,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
-            time.sleep(20)
+            time.sleep(5)
 
             if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
                 checkpoint()
