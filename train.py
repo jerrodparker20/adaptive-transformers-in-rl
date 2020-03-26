@@ -30,13 +30,22 @@ import torch
 from torch import multiprocessing as mp
 from torch import nn
 from torch.nn import functional as F
-from torchbeast.core import environment
-from torchbeast import dmlab_wrappers
-from Model.core import prof, vtrace, file_writer
+from torchbeast.core import environment as dmlab_environment
 
+try:
+    from torchbeast import dmlab_wrappers
+except:
+    print('NO DMLAB module') #is for case where using Atari on machine without dmlab
+
+from Model.core import prof, vtrace, file_writer
+from Model.core import environment as atari_environment
+from Model import atari_wrappers
 
 # yapf: disable
 parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
+
+parser.add_argument("--env", type=str, default="PongNoFrameskip-v4",
+                    help="Gym environment.")
 
 parser.add_argument("--level_name", type=str, default="rooms_collect_good_objects_train",
                     help="dmlab30 level name")
@@ -47,6 +56,9 @@ parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
 
 # Training settings.
+parser.add_argument("--atari", default=False, type=bool,
+                    help="Whether to run atari (otherwise runs DMLab)")
+
 parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
 parser.add_argument("--savedir", default="./logs/torchbeast",
@@ -185,8 +197,13 @@ def act(
 
         seed = actor_index ^ int.from_bytes(os.urandom(4), byteorder="little")
         # gym_env.seed(seed)
-        gym_env = create_env(level_name, seed)
-        env = environment.Environment(gym_env)
+        gym_env = create_env(flags=flags, seed=seed)
+        if flags.atari:
+            env = atari_environment.Environment(gym_env)
+        else:
+            #DMLAB CHANGES
+            env = dmlab_environment.Environment(gym_env)
+
         env_output = env.initial()
         env_output['done'] = torch.tensor([[0]], dtype=torch.uint8)
 
@@ -334,8 +351,8 @@ def learn(
             # Will need to change if want to use this with LSTM
 
             #TODO Trim mini_batch if all dones at the end: If everything is done just continue here
+            #    CAN DO THIS by looking at buffers['len_traj']
 
-            # TODO : Need to change batch->minibatch (batch name gets overwritten)
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
@@ -422,7 +439,7 @@ def learn(
 
             # episode_returns = mini_batch["episode_return"][mini_batch["done"]]
             episode_returns = mini_batch["episode_return"][tmp_mask]
-            mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size()))
+            mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
             num_unpadded_steps = (~mem_padding).sum().item() if mem_padding is not None else mini_batch_size
 
             stats = {
@@ -437,10 +454,8 @@ def learn(
 
             optimizer.zero_grad()
             total_loss.backward()
-            if flags.fp16:
-                optimizer.clip_master_grads(flags.grad_norm_clipping)
-            else:
-                nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
+
+            nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
             optimizer.step()
             # scheduler is being stepped in the lock of batch_and_learn itself
 
@@ -552,12 +567,17 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         logging.info("Not using CUDA.")
         flags.device = torch.device("cpu")
 
-    # DMLAB CHANGES
-    env = create_env(flags.level_name)
-    """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
-    model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET))
-    buffers = create_buffers(flags, env._observation().shape, model.num_actions)
-    # DMLAB CHANGES END
+
+    env = create_env(flags)
+    if flags.atari:
+        """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
+        model = Net(env.observation_space.shape, env.action_space.n, flags=flags)
+        buffers = create_buffers(flags, env.observation_space.shape, model.num_actions)
+    else:
+        # DMLAB CHANGES
+        """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
+        model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET), flags=flags)
+        buffers = create_buffers(flags, env._observation().shape, model.num_actions)
 
     model.share_memory()
 
@@ -592,10 +612,14 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         actor_processes.append(actor)
 
     """learner_model is the central learner, which takes in the experiences and updates itself"""
-    # DMLAB CHANGES
-    learner_model = Net(
-        env._observation().shape, len(environment.DEFAULT_ACTION_SET)).to(device=flags.device)
-    # DMLAB CHANGES END
+    if flags.atari:
+        learner_model = Net(
+            env.observation_space.shape, env.action_space.n, flags=flags).to(device=flags.device)
+    else:
+        # DMLAB CHANGES
+        learner_model = Net(
+            env._observation().shape, len(environment.DEFAULT_ACTION_SET), flags=flags).to(device=flags.device)
+        # DMLAB CHANGES END
 
     optimizer = get_optimizer(flags, learner_model.parameters())
     if optimizer is None:
@@ -668,7 +692,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                         #Is better to step based on number of non padded entries in the padding mask.
                         #Can make when we take a step be conditional on the step number (maybe each
                         #10000 we step or so.
-                        if steps_since_sched_update >= flags.steps_btw__sched_updates:
+                        if steps_since_sched_update >= flags.steps_btw_sched_updates:
                             scheduler.step()
                             steps_since_sched_update = 0
 
@@ -783,9 +807,18 @@ def test(flags, num_episodes: int = 10):
             os.path.expanduser("%s/%s/%s" % (flags.savedir, flags.xpid, "model.tar"))
         )
 
-    gym_env = create_env(flags.level_name)
-    env = environment.Environment(gym_env)
-    model = Net(gym_env.observation_space.shape, gym_env.action_space.n)
+    gym_env = create_env(flags)
+    if flags.atari:
+        env = atari_environment.Environment(gym_env)
+    else:
+        #DMLAB CHANGES
+        env = dmlab_environment.Environment(gym_env)
+
+    if flags.atari:
+        model = Net(env.observation_space.shape, env.action_space.n, flags=flags)
+    else:
+        model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET), flags=flags)
+
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -868,7 +901,7 @@ def weights_init(m):
 
 
 class AtariNet(nn.Module):
-    def __init__(self, observation_shape, num_actions):
+    def __init__(self, observation_shape, num_actions, flags):
         super(AtariNet, self).__init__()
         self.observation_shape = observation_shape
         self.num_actions = num_actions
@@ -928,7 +961,11 @@ class AtariNet(nn.Module):
 
         # Fully connected layer.
         # Changed the FC output to match the transformer output which should be divisible by number of heads
-        self.fc = nn.Linear(3456, 256 - num_actions - 1)
+        if flags.atari:
+            self.fc = nn.Linear(3872, 256 - num_actions - 1)
+        else:
+            #DMLAB CHANGES
+            self.fc = nn.Linear(3456, 256 - num_actions - 1)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
@@ -1046,8 +1083,19 @@ class AtariNet(nn.Module):
 
 Net = AtariNet
 
-def create_env(level_name, seed=1):
-    level_name = 'contributed/dmlab30/' + level_name
+def create_env(flags, seed=1):
+
+    if flags.atari:
+        return atari_wrappers.wrap_pytorch(
+            atari_wrappers.wrap_deepmind(
+                atari_wrappers.make_atari(flags.env),
+                clip_rewards=False,
+                frame_stack=True,
+                scale=False,
+            )
+        )
+
+    level_name = 'contributed/dmlab30/' + flags.level_name
     config = {
         'width': 96,
         'height': 72,
