@@ -354,7 +354,7 @@ class MemTransformerLM(nn.Module):
         self.tgt_len = tgt_len
         self.mem_len = mem_len
         self.ext_len = ext_len
-        self.max_klen = tgt_len + ext_len + mem_len
+        #self.max_klen = tgt_len + ext_len + mem_len
 
         self.layers = nn.ModuleList()
 

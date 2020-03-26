@@ -60,7 +60,7 @@ parser.add_argument("--n_layer", default=4, type=int,
                     help="num layers in transformer decoder")
 parser.add_argument("--d_inner", default=2048, type=int,
                     help="the position wise ff network dimension -> d_model x d_inner")
-parser.add_argument("--use_gate", action='store_true', type=bool,
+parser.add_argument("--use_gate", action='store_true',
                     help="whether to use gating in txl decoder")
 
 # Training settings.
@@ -461,7 +461,8 @@ def learn(
                 "pg_loss": pg_loss.item(),
                 "baseline_loss": baseline_loss.item(),
                 "entropy_loss": entropy_loss.item(),
-                "num_unpadded_steps": num_unpadded_steps
+                "num_unpadded_steps": num_unpadded_steps,
+                "len_max_traj": batch['len_traj'].max().item()
             }
 
             optimizer.zero_grad()
@@ -757,7 +758,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
-            time.sleep(5)
+            time.sleep(20)
 
             if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
                 checkpoint()
