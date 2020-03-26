@@ -69,7 +69,7 @@ parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
-parser.add_argument("--unroll_length", default=100, type=int, metavar="T",
+parser.add_argument("--unroll_length", default=1000, type=int, metavar="T",
                     help="The unroll length (time dimension).")
 parser.add_argument("--num_buffers", default=None, type=int,
                     metavar="N", help="Number of shared-memory buffers.")
