@@ -47,13 +47,21 @@ parser = argparse.ArgumentParser(description="PyTorch Scalable Agent")
 parser.add_argument("--env", type=str, default="PongNoFrameskip-v4",
                     help="Gym environment.")
 
-parser.add_argument("--level_name", type=str, default="rooms_collect_good_objects_train",
+parser.add_argument("--level_name", type=str, default="explore_goal_locations_small",
                     help="dmlab30 level name")
 parser.add_argument("--mode", default="train",
                     choices=["train", "test", "test_render"],
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
+
+# Architecture setting
+parser.add_argument("--n_layer", default=4, type=int,
+                    help="num layers in transformer decoder")
+parser.add_argument("--d_inner", default=2048, type=int,
+                    help="the position wise ff network dimension -> d_model x d_inner")
+parser.add_argument("--use_gate", action='store_true', type=bool,
+                    help="whether to use gating in txl decoder")
 
 # Training settings.
 parser.add_argument("--atari", default=False, type=bool,
@@ -63,17 +71,17 @@ parser.add_argument("--disable_checkpoint", action="store_true",
                     help="Disable saving checkpoint.")
 parser.add_argument("--savedir", default="./logs/torchbeast",
                     help="Root dir where experiment data will be saved.")
-parser.add_argument("--num_actors", default=4, type=int, metavar="N",
+parser.add_argument("--num_actors", default=45, type=int, metavar="N",
                     help="Number of actors (default: 4).")
 parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
                     help="Total environment steps to train for.")
-parser.add_argument("--batch_size", default=8, type=int, metavar="B",
+parser.add_argument("--batch_size", default=16, type=int, metavar="B",
                     help="Learner batch size.")
 parser.add_argument("--unroll_length", default=1000, type=int, metavar="T",
                     help="The unroll length (time dimension).")
 parser.add_argument("--num_buffers", default=None, type=int,
                     metavar="N", help="Number of shared-memory buffers.")
-parser.add_argument("--num_learner_threads", "--num_threads", default=2, type=int,
+parser.add_argument("--num_learner_threads", "--num_threads", default=4, type =int,
                     metavar="N", help="Number learner threads.")
 parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
@@ -91,7 +99,7 @@ parser.add_argument('--stats_episodes', default=100, type=int,
 #                     help="Use LSTM in agent model.")
 
 # Loss settings.
-parser.add_argument("--entropy_cost", default=0.0006,
+parser.add_argument("--entropy_cost", default=0.01,
                     type=float, help="Entropy cost/multiplier.")
 parser.add_argument("--baseline_cost", default=0.5,
                     type=float, help="Baseline cost/multiplier.")
@@ -104,7 +112,7 @@ parser.add_argument("--reward_clipping", default="abs_one",
 # Optimizer settings.
 parser.add_argument("--weight_decay", default=0.0,
                     type=float)
-parser.add_argument("--learning_rate", default=0.00048,
+parser.add_argument("--learning_rate", default=0.0004,
                     type=float, metavar="LR", help="Learning rate.")
 parser.add_argument("--alpha", default=0.99, type=float,
                     help="RMSProp smoothing constant.")
@@ -581,7 +589,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     else:
         # DMLAB CHANGES
         """model is each of the actors, running parallel. The upcoming block ctx.Process(...)"""
-        model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET), flags=flags)
+        model = Net(env.initial().shape, len(dmlab_environment.DEFAULT_ACTION_SET), flags=flags)
         buffers = create_buffers(flags, env._observation().shape, model.num_actions)
 
     model.share_memory()
@@ -623,8 +631,10 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     else:
         # DMLAB CHANGES
         learner_model = Net(
-            env._observation().shape, len(environment.DEFAULT_ACTION_SET), flags=flags).to(device=flags.device)
+            env._observation().shape, len(dmlab_environment.DEFAULT_ACTION_SET), flags=flags).to(device=flags.device)
         # DMLAB CHANGES END
+
+    print('--------------- TOTAL MODEL PARAMETERS : {} ---------------'.format(get_model_parameters(learner_model)))
 
     optimizer = get_optimizer(flags, learner_model.parameters())
     if optimizer is None:
@@ -822,7 +832,7 @@ def test(flags, num_episodes: int = 10):
     if flags.atari:
         model = Net(env.observation_space.shape, env.action_space.n, flags=flags)
     else:
-        model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET), flags=flags)
+        model = Net(env.initial().shape, len(dmlab_environment.DEFAULT_ACTION_SET), flags=flags)
 
     model.eval()
     checkpoint = torch.load(checkpointpath, map_location="cpu")
@@ -978,10 +988,10 @@ class AtariNet(nn.Module):
         # TODO : 1st replacement, sanity check the parameters
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
         # TODO : Change the n_layer=1 to 12
-        self.core = MemTransformerLM(n_token=None, n_layer=1, n_head=8, d_head=core_output_size // 8,
-                                     d_model=core_output_size, d_inner=2048,
-                                     dropout=0.1, dropatt=0.0, tgt_len=512, mem_len=1, ext_len=0,
-                                     use_stable_version=True, use_gate=False)
+        self.core = MemTransformerLM(n_token=None, n_layer=flags.n_layer, n_head=8, d_head=core_output_size // 8,
+                                     d_model=core_output_size, d_inner=flags.d_inner,
+                                     dropout=0.1, dropatt=0.0,                  # TODO : CHeck if tgt_len=None causes any issue
+                                     use_stable_version=True, use_gate=flags.use_gate)
         self.core.apply(weights_init)
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
@@ -1107,6 +1117,16 @@ def create_env(flags, seed=1):
         'logLevel': 'WARN',
     }
     return dmlab_wrappers.createDmLab(level_name, config, seed)
+
+
+def get_model_parameters(model):
+    total_parameters = 0
+    for layer in list(model.parameters()):
+        layer_parameter = 1
+        for l in list(layer.size()):
+            layer_parameter *= l
+        total_parameters += layer_parameter
+    return total_parameters
 
 
 def main(flags):

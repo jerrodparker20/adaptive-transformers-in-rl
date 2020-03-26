@@ -333,7 +333,7 @@ class MemTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
                  div_val=1,
-                 tgt_len=None, ext_len=None, mem_len=1,
+                 tgt_len=None, ext_len=0, mem_len=1,
                  cutoffs=[], adapt_inp=False,
                  same_length=False, clamp_len=-1,
                  use_gate=True, use_stable_version=True):
