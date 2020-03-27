@@ -705,6 +705,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
             )
             print('After Learn')
+            print('stats: ', stats)
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
@@ -1067,8 +1068,8 @@ class AtariNet(nn.Module):
         padding_mask = padding_mask.unsqueeze(0)
         if padding_mask.shape[1] == 1:
             padding_mask = None #This means we're in act or test so no need for padding
-        else:
-            print('NOT SETTING TO 1: ',padding_mask.shape)
+        #else:
+        #    print('NOT SETTING TO 1: ',padding_mask.shape)
         #if not padding_mask.any().item():  # In this case no need for padding_mask
         #    padding_mask = None
 
