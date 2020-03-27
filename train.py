@@ -378,7 +378,8 @@ def learn(
             #    CAN DO THIS by looking at buffers['len_traj']
             # For now just say that if more than half the minibatch is done, then continue
             mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
-            if mini_batch['done'].sum().item() > mini_batch_size / 2:
+            if mini_batch['done'].sum().item() ==mini_batch_size: #> mini_batch_size / 2:
+                logging.debug('Breaking with all elements done') #Breaking with more than half elements done')
                 break
 
             logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
