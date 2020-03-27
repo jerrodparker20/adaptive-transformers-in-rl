@@ -54,6 +54,8 @@ parser.add_argument("--mode", default="train",
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
+parser.add_argument("--sleep_length", default=20, type=int,
+                    help="time between print statements from main thread")
 
 # Architecture setting
 parser.add_argument("--n_layer", default=4, type=int,
@@ -780,7 +782,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
-            time.sleep(5)
+            time.sleep(flags.sleep_length)
 
             if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
                 checkpoint()
