@@ -238,7 +238,7 @@ def act(
 
             # Do one new rollout, untill flags.unroll_length
             t = 0
-            #print('STARTING UP ACTOR: ', actor_index)
+            print('STARTING UP ACTOR: ', actor_index)
             while t < flags.unroll_length and not env_output['done'].item():
                 # for t in range(flags.unroll_length):
                 timings.reset()
@@ -248,7 +248,7 @@ def act(
 
                 with torch.no_grad():
                     agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
-                #print('actor: {}, t: {}'.format(actor_index,t))
+                print('actor: {}, t: {}'.format(actor_index,t))
                 timings.time("model")
 
                 # TODO : Check if this probability skipping can compromise granularity
