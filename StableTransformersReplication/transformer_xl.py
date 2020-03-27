@@ -454,7 +454,7 @@ class MemTransformerLM(nn.Module):
         # TODO: Possibly make this more efficient (check how much things slow down)
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
-        if not (padding_mask is None) and padding_mask.sum().item() > 0:
+        if not (padding_mask is None):# and padding_mask.sum().item() > 0:
             # concat the memory padding along with the padding_mask
             #print('IN TXL')
             #print('PADDING BEFORE: ', dec_attn_mask[:,:,0])

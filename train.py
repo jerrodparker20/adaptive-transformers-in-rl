@@ -735,7 +735,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                             steps_since_sched_update = 0
                     elif flags.scheduler == 'linear_decay':
                         #print('LR before: ', optimizer.param_groups[0]['lr'])
-                        optimizer.param_groups[0]['lr'] = 1-min(step,flags.total_steps)/flags.total_steps
+                        optimizer.param_groups[0]['lr'] *= 1-min(step,flags.total_steps)/flags.total_steps
                         #print('LR AFTER : ',optimizer.param_groups[0]['lr'])
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
