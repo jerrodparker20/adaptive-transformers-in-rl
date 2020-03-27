@@ -130,7 +130,7 @@ parser.add_argument('--optim', default='RMSProp', type=str,
                     choices=['adam', 'sgd', 'adagrad, RMSProp'],
                     help='optimizer to use.')
 parser.add_argument('--scheduler', default='cosine', type=str,
-                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
+                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR','linear_decay'],
                     help='lr scheduler to use.')
 parser.add_argument('--warmup_step', type=int, default=0,
                     help='upper epoch limit')
@@ -252,7 +252,8 @@ def act(
 
                 with torch.no_grad():
                     agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
-                logging.debug('actor: %i, t: %i', actor_index, t)
+                #if actor_index == 0:
+                #    logging.debug('actor: t: {}, mems size: {}, mem_padding size: {}'.format(t, mems[0].shape, mem_padding))
                 timings.time("model")
 
                 # TODO : Check if this probability skipping can compromise granularity
@@ -283,7 +284,7 @@ def act(
                 # TODO Is there a potential bug here
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
-            logging.debug('Done rollout actor: %i', actor_index)
+            #logging.debug('Done rollout actor: %i', actor_index)
             full_queue.put(index)
 
         if actor_index == 0:
@@ -718,7 +719,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
-                if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
+                if flags.scheduler in ['cosine', 'constant', 'dev_perf','linear_decay']:
                     # linear warmup stage
                     if step < flags.warmup_step:
                         curr_lr = flags.learning_rate * step / flags.warmup_step
@@ -732,7 +733,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                         if steps_since_sched_update >= flags.steps_btw_sched_updates:
                             scheduler.step()
                             steps_since_sched_update = 0
-
+                    elif flags.scheduler == 'linear_decay':
+                        
+                        print('LR before: ', optimizer.param_groups[0]['lr'])
+                        optimizer.param_groups[0]['lr'] = 1-min(step,flags.total_steps)/flags.total_steps
+                        print('LR AFTER : ',optimizer.param_groups[0]['lr'])
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
 
@@ -1050,6 +1055,7 @@ class AtariNet(nn.Module):
         # print('x shape : ',x.shape)
         x = F.relu(self.fc(x))
 
+        #logging.debug('In Atari net shape inputs: {}'.format(inputs['done'].shape))
         # print('inputs: ', inputs)
         # print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
@@ -1082,10 +1088,14 @@ class AtariNet(nn.Module):
         #    print('NOT SETTING TO 1: ',padding_mask.shape)
         #if not padding_mask.any().item():  # In this case no need for padding_mask
         #    padding_mask = None
-
+        #if not mem_padding is None:
+        #    print('Before pad mask: ', padding_mask.squeeze())
+        #    print('before mem mask: ', mem_padding.squeeze())
         core_output, mems = self.core(core_input, mems, padding_mask=padding_mask,
                                       mem_padding=mem_padding)  # core_input is of shape (T, B, ...)
         # core_output is (B, ...)
+        #if mem_padding is not None:
+        #    print('padding_mask AFTER : ', padding_mask.squeeze())
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
