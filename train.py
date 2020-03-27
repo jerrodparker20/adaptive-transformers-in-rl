@@ -64,6 +64,8 @@ parser.add_argument("--use_gate", action='store_true',
                     help="whether to use gating in txl decoder")
 
 # Training settings.
+parser.add_argument('--debug', action='store_true',
+                    help='set logging level to debug')
 parser.add_argument("--atari", default=False, type=bool,
                     help="Whether to run atari (otherwise runs DMLab)")
 
@@ -238,7 +240,7 @@ def act(
 
             # Do one new rollout, untill flags.unroll_length
             t = 0
-            print('STARTING UP ACTOR: ', actor_index)
+            logging.debug('STARTING UP ACTOR: %i', actor_index)
             while t < flags.unroll_length and not env_output['done'].item():
                 # for t in range(flags.unroll_length):
                 timings.reset()
@@ -248,7 +250,7 @@ def act(
 
                 with torch.no_grad():
                     agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
-                print('actor: {}, t: {}'.format(actor_index,t))
+                logging.debug('actor: %i, t: %i', actor_index, t)
                 timings.time("model")
 
                 # TODO : Check if this probability skipping can compromise granularity
@@ -279,7 +281,7 @@ def act(
                 # TODO Is there a potential bug here
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
-            print('Done rollout actor: ', actor_index)
+            logging.debug('Done rollout actor: %i', actor_index)
             full_queue.put(index)
 
         if actor_index == 0:
@@ -303,7 +305,7 @@ def get_batch(
         timings,
         lock=threading.Lock(),
 ):
-    print('STARTING GET_BATCH')
+    logging.debug('STARTING GET_BATCH')
     with lock:
         timings.time("lock")
         indices = [full_queue.get() for _ in range(flags.batch_size)]
@@ -330,7 +332,7 @@ def get_batch(
         t.to(device=flags.device, non_blocking=True) for t in initial_agent_state
     )
     timings.time("device")
-    print('Returned GetBATCH')
+    logging.debug('Returned GetBATCH')
     return batch, initial_agent_state
 
 
@@ -359,14 +361,14 @@ def learn(
         # print({key: batch[key].shape for key in batch})
         mems, mem_padding = None, None
         stats = {}
-        print('AT LEARN')
+        logging.debug('AT LEARN')
         for i in range(0, flags.unroll_length + 1, flags.chunk_size):
             mini_batch = {key: batch[key][i:i + flags.chunk_size] for key in batch if key != 'len_traj'}
             # Note that initial agent state isn't used by transformer (I think this is hidden state)
             # Will need to change if want to use this with LSTM
 
             if mini_batch['done'].shape[0] != flags.chunk_size:
-                print('BREAKING WITH SHAPE :', mini_batch['done'].shape)
+                logging.debug('BREAKING WITH SHAPE : %s', mini_batch['done'].shape)
                 break #This would break around memory padding
 
             #TODO Trim mini_batch if all dones at the end: If everything is done just continue here
@@ -376,7 +378,7 @@ def learn(
             if mini_batch['done'].sum().item() > mini_batch_size / 2:
                 break
 
-            print('MiniBatch shape: ', mini_batch['done'].shape)
+            logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
@@ -552,6 +554,11 @@ def get_scheduler(flags, optimizer):
 
 def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
+    if flags.debug:
+        logging.root.setLevel(level=logging.DEBUG)
+    else:
+        logging.root.setLevel(level=logging.INFO)
+    logging.debug('First Debug message')
     # load the previous config if use_pretrained is true
     if flags.use_pretrained:
         logging.info('Using Pretrained Model')
@@ -700,12 +707,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
-            print('Before Learn')
+            logging.debug('Before Learn')
             stats = learn(
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
             )
-            print('After Learn')
-            print('stats: ', stats)
+            logging.debug('After Learn')
+            logging.debug('stats: %s ', stats)
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
@@ -749,7 +756,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         thread.start()
         threads.append(thread)
 
-    print('FINSIHED starting batchand learn')
+    logging.debug('FINSIHED starting batchand learn')
     def checkpoint():
         if flags.disable_checkpoint:
             return
@@ -768,7 +775,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     try:
         last_checkpoint_time = timer()
         last_n_episode_returns = torch.zeros((flags.stats_episodes))
-        print('initialized stats_eposiodes')
+        logging.debug('initialized stats_eposiodes')
         curr_index = -1
         while step < flags.total_steps:
             start_step = step
