@@ -57,6 +57,7 @@ parser.add_argument("--xpid", default=None,
 parser.add_argument("--sleep_length", default=20, type=int,
                     help="time between print statements from main thread")
 
+
 # Architecture setting
 parser.add_argument("--n_layer", default=4, type=int,
                     help="num layers in transformer decoder")
@@ -66,6 +67,8 @@ parser.add_argument("--use_gate", action='store_true',
                     help="whether to use gating in txl decoder")
 
 # Training settings.
+parser.add_argument('--learner_no_mem', action='store_true',
+                    help='if true then learner function doesnt use memory')
 parser.add_argument('--debug', action='store_true',
                     help='set logging level to debug')
 parser.add_argument("--atari", default=False, type=bool,
@@ -386,6 +389,10 @@ def learn(
             logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
+
+            if flags.learner_no_mem:
+                mems = None
+                mem_padding = None
 
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
