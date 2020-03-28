@@ -45,13 +45,19 @@ class AdaptiveMask(nn.Module):
 
     def forward(self, x):
         # this function applies mask to the x.
+        # x is of shape (qlen, klen, batch, n_heads)
         # The current_val is a proportion of self._max_size so its multiplied # TODO : Find out why the self.mask_template is an addition
-        mask = self.mask_template + self.current_val * self._max_size
+        mask = self.mask_template + self.current_val * self._max_size       # TODO : This seems to be wrong especially when it is called on attn in forward for AdaptiveSpan
         mask = mask / self._ramp_size + 1
         mask = mask.clamp(0, 1)     # this is the equation of mz(x) from the paper
-        if x.size(-1) < self._max_size:
-            # the input could have been trimmed beforehand to save computation
-            mask = mask[:, :, -x.size(-1):]
+        # if x.size(-1) < self._max_size:
+        #     # the input could have been trimmed beforehand to save computation
+        #     mask = mask[:, :, -x.size(-1):]
+        # mask is of shape n_heads x klen - for each head you want to learn the span
+        # TODO : If correct transpose
+        mask = mask.transpose(1, 0)
+        mask = mask.view(1, mask.size(0), 1, mask.size(1)).repeat(x.size(0), 1, x.size(2), 1)
+        # Now both mask and x are same shape
         x = x * mask
         return x
 
@@ -89,25 +95,33 @@ class AdaptiveSpan(nn.Module):
                  adapt_span_init, adapt_span_cache, nb_heads, **kargs):
         nn.Module.__init__(self)
         self._adapt_cache = adapt_span_cache
+        # this should be the klen
         self._max_span = attn_span
         self._loss_coeff = adapt_span_loss
         self._nb_heads = nb_heads
         self._mask = AdaptiveMask(max_size=self._max_span,
                                  ramp_size=adapt_span_ramp,
                                  init_val=adapt_span_init,
-                                 shape=(nb_heads, 1, 1))
+                                 # shape=(nb_heads, 1, 1))
+                                shape=(nb_heads, 1))
 
     def forward(self, attn):
         """mask attention with the right span"""
         # batch and head dimensions are merged together, so separate them first
-        B = attn.size(0) # batch size
-        M = attn.size(1) # block size
-        attn = attn.reshape(B // self._nb_heads, self._nb_heads, M, -1)
+        # shape of attn is qlen x keylen x batch x n_heads
+
+        # B = attn.size(2) # batch size
+        # M = attn.size(3) # block size
+        # qlen = attn.size(0)
+        # klen = attn.size(1)
+        # attn = attn.reshape(B, M, qlen, klen)
+        # attn = attn.reshape(B // self._nb_heads, self._nb_heads, M, -1)
 
         attn = self._mask(attn)
         attn = attn / (attn.sum(-1, keepdim=True) + 1e-8)  # normalize so sum is 1
 
-        attn = attn.view(B, M, -1)
+        # attn = attn.view(B, M, -1)
+        # attn = attn.view(qlen, klen, B, M)
         return attn
 
     def get_trim_len(self):
