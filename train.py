@@ -174,8 +174,6 @@ def compute_entropy_loss(logits, padding_mask):
     log_policy = F.log_softmax(logits, dim=-1)
 
     if padding_mask is not None:
-        # print('log_policyshape: ', log_policy.shape)
-        # print('padding mask: ', padding_mask.shape)
         log_policy = log_policy * padding_mask.unsqueeze(2)
 
     return torch.sum(policy * log_policy)
@@ -382,12 +380,21 @@ def learn(
                 logging.debug('Breaking with all elements done') #Breaking with more than half elements done')
                 break
 
+            if mini_batch['done'].sum().item() > 0:
+                print(mini_batch['done'])
+                print('FOUND ONE')
             logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
+            #to_print = False
+            #if mini_batch['done'].sum().item() > 0:
+            #    print('INds done: ', ind_first_done)
+            #    print('MEM PADDING AFTER: ', mem_padding)
+            #    to_print = True
+
             # Here mem_padding is same as "batch" padding for this iteration so can use
             # for masking loss
 
@@ -434,6 +441,10 @@ def learn(
 
             # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
             pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
+
+            #if to_print:
+            #    print('AFTER WARDS 2 mem_padding: ', mem_padding)
+            #    print('Pad_mask: ', pad_mask)
 
             pg_loss = compute_policy_gradient_loss(
                 learner_outputs["policy_logits"],
@@ -736,7 +747,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                             steps_since_sched_update = 0
                     elif flags.scheduler == 'linear_decay':
                         #print('LR before: ', optimizer.param_groups[0]['lr'])
-                        optimizer.param_groups[0]['lr'] *= 1-min(step,flags.total_steps)/flags.total_steps
+                        multiplier = 1-min(step,flags.total_steps)/flags.total_steps
+                        optimizer.param_groups[0]['lr'] = flags.learning_rate * multiplier
                         #print('LR AFTER : ',optimizer.param_groups[0]['lr'])
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
