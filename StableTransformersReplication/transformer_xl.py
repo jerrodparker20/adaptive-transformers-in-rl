@@ -422,7 +422,10 @@ class MemTransformerLM(nn.Module):
             #       this once move to larger environments (THIS HAS NOW BEEN CHANGED)
 
             #HERE IS THE PROBLEM.
-            beg_idx = max(0, end_idx - self.mem_len)
+            #print('hids shape: ', hids[0].shape)
+
+            beg_idx = max(0, end_idx - self.mem_len) if hids[0].shape[0] > 1 else 0
+            #print('BEG IND: ', beg_idx)
             for i in range(len(hids)):
 
                 cat = torch.cat([mems[i], hids[i]], dim=0)
@@ -454,15 +457,18 @@ class MemTransformerLM(nn.Module):
         # TODO: Possibly make this more efficient (check how much things slow down)
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
-        if not (padding_mask is None):
+        if not (padding_mask is None):# and padding_mask.sum().item() > 0:
             # concat the memory padding along with the padding_mask
+            #print('IN TXL')
+            #print('PADDING BEFORE: ', dec_attn_mask[:,:,0])
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
+            #print('PADDING AFTER', [dec_attn_mask[:,:,x] for x in range(bsz)])
             #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
             #want the mlen diagonal to be 0's so that each query can attend
             #to itself
             dec_attn_mask[range(qlen), range(mlen, klen), :] = False
-            #print('AFTER: ', dec_attn_mask[:,:,0])
+            #print('AFTER: ', [dec_attn_mask[:,:,x] for x in range(bsz)])
             #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
@@ -490,7 +496,7 @@ class MemTransformerLM(nn.Module):
 
 
         core_out = self.drop(core_out)
-
+        #print('before update mems hids shape: {}, mems shape {}'.format(hids[0].shape,mems[0].shape if mems else None))
         new_mems = self._update_mems(hids, mems, mlen, qlen)
 
         return core_out, new_mems

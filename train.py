@@ -54,6 +54,9 @@ parser.add_argument("--mode", default="train",
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
+parser.add_argument("--sleep_length", default=20, type=int,
+                    help="time between print statements from main thread")
+
 
 # Architecture setting
 parser.add_argument("--n_layer", default=4, type=int,
@@ -64,6 +67,8 @@ parser.add_argument("--use_gate", action='store_true',
                     help="whether to use gating in txl decoder")
 
 # Training settings.
+parser.add_argument('--learner_no_mem', action='store_true',
+                    help='if true then learner function doesnt use memory')
 parser.add_argument('--debug', action='store_true',
                     help='set logging level to debug')
 parser.add_argument("--atari", default=False, type=bool,
@@ -128,9 +133,9 @@ parser.add_argument('--optim', default='RMSProp', type=str,
                     choices=['adam', 'sgd', 'adagrad, RMSProp'],
                     help='optimizer to use.')
 parser.add_argument('--scheduler', default='cosine', type=str,
-                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR'],
+                    choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR','linear_decay'],
                     help='lr scheduler to use.')
-parser.add_argument('--warmup_step', type=int, default=0,
+parser.add_argument('--warmup_step', type=float, default=0,
                     help='upper epoch limit')
 parser.add_argument('--steps_btw_sched_updates', type=int, default=10000,
                     help='number of steps between scheduler updates')
@@ -172,8 +177,6 @@ def compute_entropy_loss(logits, padding_mask):
     log_policy = F.log_softmax(logits, dim=-1)
 
     if padding_mask is not None:
-        # print('log_policyshape: ', log_policy.shape)
-        # print('padding mask: ', padding_mask.shape)
         log_policy = log_policy * padding_mask.unsqueeze(2)
 
     return torch.sum(policy * log_policy)
@@ -250,7 +253,8 @@ def act(
 
                 with torch.no_grad():
                     agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
-                logging.debug('actor: %i, t: %i', actor_index, t)
+                #if actor_index == 0:
+                #    logging.debug('actor: t: {}, mems size: {}, mem_padding size: {}'.format(t, mems[0].shape, mem_padding))
                 timings.time("model")
 
                 # TODO : Check if this probability skipping can compromise granularity
@@ -281,7 +285,7 @@ def act(
                 # TODO Is there a potential bug here
                 buffers['done'][index][t + 1:] = torch.tensor([True]).repeat(flags.unroll_length - t)
 
-            logging.debug('Done rollout actor: %i', actor_index)
+            #logging.debug('Done rollout actor: %i', actor_index)
             full_queue.put(index)
 
         if actor_index == 0:
@@ -375,15 +379,29 @@ def learn(
             #    CAN DO THIS by looking at buffers['len_traj']
             # For now just say that if more than half the minibatch is done, then continue
             mini_batch_size = torch.prod(torch.tensor(mini_batch['done'].size())).item()
-            if mini_batch['done'].sum().item() > mini_batch_size / 2:
+            if mini_batch['done'].sum().item() ==mini_batch_size: #> mini_batch_size / 2:
+                logging.debug('Breaking with all elements done') #Breaking with more than half elements done')
                 break
 
+            #if mini_batch['done'].sum().item() > 0:
+            #    print(mini_batch['done'])
+            #    print('FOUND ONE')
             logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()
 
+            if flags.learner_no_mem:
+                mems = None
+                mem_padding = None
+
             learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
+            #to_print = False
+            #if mini_batch['done'].sum().item() > 0:
+            #    print('INds done: ', ind_first_done)
+            #    print('MEM PADDING AFTER: ', mem_padding)
+            #    to_print = True
+
             # Here mem_padding is same as "batch" padding for this iteration so can use
             # for masking loss
 
@@ -430,6 +448,10 @@ def learn(
 
             # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
             pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
+
+            #if to_print:
+            #    print('AFTER WARDS 2 mem_padding: ', mem_padding)
+            #    print('Pad_mask: ', pad_mask)
 
             pg_loss = compute_policy_gradient_loss(
                 learner_outputs["policy_logits"],
@@ -716,7 +738,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             timings.time("learn")
             with lock:
                 # step-wise learning rate annealing
-                if flags.scheduler in ['cosine', 'constant', 'dev_perf']:
+                if flags.scheduler in ['cosine', 'constant', 'dev_perf','linear_decay']:
                     # linear warmup stage
                     if step < flags.warmup_step:
                         curr_lr = flags.learning_rate * step / flags.warmup_step
@@ -730,7 +752,11 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                         if steps_since_sched_update >= flags.steps_btw_sched_updates:
                             scheduler.step()
                             steps_since_sched_update = 0
-
+                    elif flags.scheduler == 'linear_decay':
+                        #print('LR before: ', optimizer.param_groups[0]['lr'])
+                        multiplier = 1-min(step,flags.total_steps)/flags.total_steps
+                        optimizer.param_groups[0]['lr'] = flags.learning_rate * multiplier
+                        #print('LR AFTER : ',optimizer.param_groups[0]['lr'])
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
 
@@ -780,7 +806,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
-            time.sleep(5)
+            time.sleep(flags.sleep_length)
 
             if timer() - last_checkpoint_time > 10 * 60:  # Save every 10 min.
                 checkpoint()
@@ -1048,6 +1074,7 @@ class AtariNet(nn.Module):
         # print('x shape : ',x.shape)
         x = F.relu(self.fc(x))
 
+        #logging.debug('In Atari net shape inputs: {}'.format(inputs['done'].shape))
         # print('inputs: ', inputs)
         # print('inputs last action', inputs['last_action'])
         one_hot_last_action = F.one_hot(
@@ -1080,10 +1107,14 @@ class AtariNet(nn.Module):
         #    print('NOT SETTING TO 1: ',padding_mask.shape)
         #if not padding_mask.any().item():  # In this case no need for padding_mask
         #    padding_mask = None
-
+        #if not mem_padding is None:
+        #    print('Before pad mask: ', padding_mask.squeeze())
+        #    print('before mem mask: ', mem_padding.squeeze())
         core_output, mems = self.core(core_input, mems, padding_mask=padding_mask,
                                       mem_padding=mem_padding)  # core_input is of shape (T, B, ...)
         # core_output is (B, ...)
+        #if mem_padding is not None:
+        #    print('padding_mask AFTER : ', padding_mask.squeeze())
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
