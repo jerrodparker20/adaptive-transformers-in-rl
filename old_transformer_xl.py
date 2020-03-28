@@ -333,7 +333,7 @@ class MemTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
                  div_val=1,
-                 tgt_len=None, ext_len=0, mem_len=1,
+                 tgt_len=None, ext_len=None, mem_len=1,
                  cutoffs=[], adapt_inp=False,
                  same_length=False, clamp_len=-1,
                  use_gate=True, use_stable_version=True):
@@ -354,7 +354,7 @@ class MemTransformerLM(nn.Module):
         self.tgt_len = tgt_len
         self.mem_len = mem_len
         self.ext_len = ext_len
-        #self.max_klen = tgt_len + ext_len + mem_len
+        self.max_klen = tgt_len + ext_len + mem_len
 
         self.layers = nn.ModuleList()
 
@@ -419,13 +419,8 @@ class MemTransformerLM(nn.Module):
             end_idx = mlen + max(0, qlen - 0 - self.ext_len) # ext_len looks to usually be 0 (in their experiments anyways
 
             # TODO: I have changed beg_idx to 0 since want to use all memory, may want to change
-            #       this once move to larger environments (THIS HAS NOW BEEN CHANGED)
-
-            #HERE IS THE PROBLEM.
-            #print('hids shape: ', hids[0].shape)
-
-            beg_idx = max(0, end_idx - self.mem_len) if hids[0].shape[0] > 1 else 0
-            #print('BEG IND: ', beg_idx)
+            #       this once move to larger environments
+            beg_idx = 0 #max(0, end_idx - self.mem_len)
             for i in range(len(hids)):
 
                 cat = torch.cat([mems[i], hids[i]], dim=0)
@@ -457,18 +452,15 @@ class MemTransformerLM(nn.Module):
         # TODO: Possibly make this more efficient (check how much things slow down)
         # This part only runs when calling model in "learn" since in "act" we will
         # never need padding
-        if not (padding_mask is None):# and padding_mask.sum().item() > 0:
+        if not (padding_mask is None):
             # concat the memory padding along with the padding_mask
-            #print('IN TXL')
-            #print('PADDING BEFORE: ', dec_attn_mask[:,:,0])
             dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
             dec_attn_mask = dec_attn_mask | padding_mask
-            #print('PADDING AFTER', [dec_attn_mask[:,:,x] for x in range(bsz)])
             #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
             #want the mlen diagonal to be 0's so that each query can attend
             #to itself
             dec_attn_mask[range(qlen), range(mlen, klen), :] = False
-            #print('AFTER: ', [dec_attn_mask[:,:,x] for x in range(bsz)])
+            #print('AFTER: ', dec_attn_mask[:,:,0])
             #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
@@ -496,7 +488,7 @@ class MemTransformerLM(nn.Module):
 
 
         core_out = self.drop(core_out)
-        #print('before update mems hids shape: {}, mems shape {}'.format(hids[0].shape,mems[0].shape if mems else None))
+
         new_mems = self._update_mems(hids, mems, mlen, qlen)
 
         return core_out, new_mems
@@ -512,21 +504,16 @@ class MemTransformerLM(nn.Module):
 
         #Concatenate mem_padding and padding_mask (slight modifications if None)
         padding_mask2 = mem_padding
-        #print('mem_padding', mem_padding.shape if mem_padding is not None else None)
-        #print('PADDING MASK: ', padding_mask.shape if padding_mask is not None else None)
         if padding_mask2 is None:
             padding_mask2 = padding_mask
         elif padding_mask is not None:
             padding_mask2 = torch.cat([mem_padding, padding_mask], dim=1)
 
-        '''
         if mem_padding is not None and padding_mask is not None:
             print('Adding orig: ', padding_mask[:,:,0])
             print('mem_padding: ', mem_padding[:,:,0])
             print('Result: ', padding_mask2[:,:,0])
-            print('DATA shape: ', data.shape)
-            print('mems shape: ', mems[0].shape)
-        '''
+
         hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
 
         return hidden, new_mems
