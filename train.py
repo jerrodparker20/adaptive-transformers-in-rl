@@ -132,7 +132,7 @@ parser.add_argument('--optim', default='RMSProp', type=str,
 parser.add_argument('--scheduler', default='cosine', type=str,
                     choices=['cosine', 'inv_sqrt', 'dev_perf', 'constant', 'torchLR','linear_decay'],
                     help='lr scheduler to use.')
-parser.add_argument('--warmup_step', type=int, default=0,
+parser.add_argument('--warmup_step', type=float, default=0,
                     help='upper epoch limit')
 parser.add_argument('--steps_btw_sched_updates', type=int, default=10000,
                     help='number of steps between scheduler updates')
@@ -380,9 +380,9 @@ def learn(
                 logging.debug('Breaking with all elements done') #Breaking with more than half elements done')
                 break
 
-            if mini_batch['done'].sum().item() > 0:
-                print(mini_batch['done'])
-                print('FOUND ONE')
+            #if mini_batch['done'].sum().item() > 0:
+            #    print(mini_batch['done'])
+            #    print('FOUND ONE')
             logging.debug('MiniBatch shape: %s', mini_batch['done'].shape)
 
             tmp_mask = torch.zeros_like(mini_batch["done"]).bool()

@@ -422,7 +422,10 @@ class MemTransformerLM(nn.Module):
             #       this once move to larger environments (THIS HAS NOW BEEN CHANGED)
 
             #HERE IS THE PROBLEM.
-            beg_idx = max(0, end_idx - self.mem_len)
+            #print('hids shape: ', hids[0].shape)
+
+            beg_idx = max(0, end_idx - self.mem_len) if hids[0].shape[0] > 1 else 0
+            #print('BEG IND: ', beg_idx)
             for i in range(len(hids)):
 
                 cat = torch.cat([mems[i], hids[i]], dim=0)
