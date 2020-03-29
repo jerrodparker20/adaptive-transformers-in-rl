@@ -424,7 +424,7 @@ class MemTransformerLM(nn.Module):
             #HERE IS THE PROBLEM.
             #print('hids shape: ', hids[0].shape)
 
-            beg_idx = max(0, end_idx - self.mem_len) if hids[0].shape[0] > 1 else 0
+            beg_idx = max(0, end_idx - self.mem_len) #if hids[0].shape[0] > 1 else 0
             #print('BEG IND: ', beg_idx)
             for i in range(len(hids)):
 
