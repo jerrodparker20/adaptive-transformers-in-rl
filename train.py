@@ -500,7 +500,7 @@ def learn(
                 "num_unpadded_steps": num_unpadded_steps,
                 "len_max_traj": batch['len_traj'].max().item()
             }
-
+            # logging.debug('in learn with stats : %s', str(stats))
             optimizer.zero_grad()
             total_loss.backward()
 
@@ -697,10 +697,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         # use the default scheduler as used in monobeast
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    last_n_episode_return_key = "last_{}_episode_returns".format(flags.stats_episodes)
     logger = logging.getLogger("logfile")
     stat_keys = [
         "total_loss",
         "mean_episode_return",
+        last_n_episode_return_key,
+        "max_return_achieved",
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
@@ -717,7 +720,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
-        nonlocal step, stats, steps_since_sched_update
+        nonlocal step, stats, steps_since_sched_update, last_n_episode_returns
+        # TODO : last_n_episode_returns and curr_index will be screwed if you use 1+ learner threads, keep in mind
+        curr_index = -1
+        max_return = -999
+        max_return_step = 0
+
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
@@ -759,6 +767,17 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                         #print('LR AFTER : ',optimizer.param_groups[0]['lr'])
                 elif flags.scheduler == 'inv_sqrt':
                     scheduler.step()
+
+                episode_returns = stats.get("episode_returns", None)
+                if episode_returns:
+                    for el in episode_returns:
+                        last_n_episode_returns[(curr_index + 1) % flags.stats_episodes] = el.item()
+                        curr_index += 1
+                        if el.item() > max_return:
+                            max_return = el.item()
+                            max_return_step = step
+                stats.update({last_n_episode_return_key: last_n_episode_returns.mean().item()})
+                stats.update({'max_return_achieved':'{} at step {}'.format(max_return, max_return_step)})
 
                 to_log = dict(step=step)
                 to_log.update({k: stats.get(k, None) for k in stat_keys})
@@ -802,7 +821,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         last_checkpoint_time = timer()
         last_n_episode_returns = torch.zeros((flags.stats_episodes))
         logging.debug('initialized stats_eposiodes')
-        curr_index = -1
         while step < flags.total_steps:
             start_step = step
             start_time = timer()
@@ -821,9 +839,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 # print(episode_returns)
                 # print(type(episode_returns[0]))
                 # torch.save(episode_returns, './ep_return.pt')
-                for el in episode_returns:
-                    last_n_episode_returns[(curr_index + 1) % flags.stats_episodes] = el.item()
-                    curr_index += 1
             else:
                 mean_return = ""
             total_loss = stats.get("total_loss", float("inf"))
@@ -838,12 +853,10 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             #     best_val_loss = val_loss
 
             logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. Last %i episode returns %.2f %sStats:\n%s",
+                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
                 step,
                 sps,
                 total_loss,
-                flags.stats_episodes,
-                last_n_episode_returns.mean(),
                 mean_return,
                 pprint.pformat(stats),
             )
