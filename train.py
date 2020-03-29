@@ -277,6 +277,7 @@ def act(
             if env_output['done'].item():
                 mems = None
                 # Take arbitrary step to reset environment
+                logging.debug('actor: {}, RETURN: {}'.format(actor_index, env_output['episode_return']))
                 env_output = env.step(torch.tensor([2]))
 
             buffers['len_traj'][index][0] = t
