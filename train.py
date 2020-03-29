@@ -94,6 +94,8 @@ parser.add_argument("--disable_cuda", action="store_true",
                     help="Disable CUDA.")
 parser.add_argument("--chunk_size", default=100, type=int,
                     help="Size of chunks to chop batch into")
+parser.add_argument("--mem_len", default=100, type=int,
+                    help="Length of memory segment for TXL")
 parser.add_argument('--use_pretrained', action='store_true',
                     help='use the pretrained model identified by --xpid')
 parser.add_argument('--action_repeat', default=4, type=int,
@@ -222,7 +224,7 @@ def act(
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
-        agent_output, unused_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
+        agent_output, unused_state, mems, mem_padding, pad_mask1, _ = model(env_output, agent_state, mems, mem_padding)
         while True:
             index = free_queue.get()
             if index is None:
@@ -252,7 +254,7 @@ def act(
                 #    mems = None
 
                 with torch.no_grad():
-                    agent_output, agent_state, mems, mem_padding, _ = model(env_output, agent_state, mems, mem_padding)
+                    agent_output, agent_state, mems, mem_padding, pad_mask1, _ = model(env_output, agent_state, mems, mem_padding)
                 #if actor_index == 0:
                 #    logging.debug('actor: t: {}, mems size: {}, mem_padding size: {}'.format(t, mems[0].shape, mem_padding))
                 timings.time("model")
@@ -395,7 +397,7 @@ def learn(
                 mems = None
                 mem_padding = None
 
-            learner_outputs, unused_state, mems, mem_padding, ind_first_done = model(mini_batch, initial_agent_state,
+            learner_outputs, unused_state, mems, mem_padding, curpad_mask, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
             #to_print = False
             #if mini_batch['done'].sum().item() > 0:
@@ -448,7 +450,7 @@ def learn(
             # Advantages are [rollout_len, batch_size]
 
             # First we mask out vtrace_returns.pg_advantages where there is padding which fixes pg_loss
-            pad_mask = (~(mem_padding.squeeze(0)[1:])).float() if mem_padding is not None else None
+            pad_mask = (~(curpad_mask.squeeze(0)[1:])).float() if curpad_mask is not None else None
 
             #if to_print:
             #    print('AFTER WARDS 2 mem_padding: ', mem_padding)
@@ -712,6 +714,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
     step, stats = 0, {}
+    last_n_episode_returns = torch.zeros((flags.stats_episodes))
     steps_since_sched_update = 0
     if flags.use_pretrained:
         logging.info('Using Pretrained Model -> loading learner_model, optimizer, scheduler states')
@@ -824,7 +827,6 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
     timer = timeit.default_timer
     try:
         last_checkpoint_time = timer()
-        last_n_episode_returns = torch.zeros((flags.stats_episodes))
         logging.debug('initialized stats_eposiodes')
         while step < flags.total_steps:
             start_step = step
@@ -914,7 +916,7 @@ def test(flags, num_episodes: int = 10):
         if flags.mode == "test_render":
             env.gym_env.render()
 
-        agent_outputs, core_state, mems, mem_padding, ind_first_done = model(observation, mems=mems,
+        agent_outputs, core_state, mems, mem_padding, _, ind_first_done = model(observation, mems=mems,
                                                                              mem_padding=mem_padding)
         observation = env.step(agent_outputs["action"])
         if observation["done"].item():
@@ -1057,7 +1059,7 @@ class AtariNet(nn.Module):
         # TODO : Change the n_layer=1 to 12
         self.core = MemTransformerLM(n_token=None, n_layer=flags.n_layer, n_head=8, d_head=core_output_size // 8,
                                      d_model=core_output_size, d_inner=flags.d_inner,
-                                     dropout=0.1, dropatt=0.0, mem_len=flags.chunk_size,  # TODO : CHeck if tgt_len=None causes any issue
+                                     dropout=0.1, dropatt=0.0, mem_len=flags.mem_len,  # TODO : CHeck if tgt_len=None causes any issue
                                      use_stable_version=True, use_gate=flags.use_gate)
         self.core.apply(weights_init)
         self.policy = nn.Linear(core_output_size, self.num_actions)
@@ -1128,7 +1130,9 @@ class AtariNet(nn.Module):
         #if not mem_padding is None:
         #    print('Before pad mask: ', padding_mask.squeeze())
         #    print('before mem mask: ', mem_padding.squeeze())
-        core_output, mems = self.core(core_input, mems, padding_mask=padding_mask,
+
+        #Mem_pad_mask is the memory_mask to use at the next iteration
+        core_output, mems, mem_pad_mask = self.core(core_input, mems, padding_mask=padding_mask,
                                       mem_padding=mem_padding)  # core_input is of shape (T, B, ...)
         # core_output is (B, ...)
         #if mem_padding is not None:
@@ -1168,7 +1172,7 @@ class AtariNet(nn.Module):
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state, mems, padding_mask, ind_first_done
+            core_state, mems, mem_pad_mask, padding_mask, ind_first_done
         )
 
 

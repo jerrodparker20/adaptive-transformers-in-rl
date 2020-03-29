@@ -529,7 +529,10 @@ class MemTransformerLM(nn.Module):
         '''
         hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
 
-        return hidden, new_mems
+        if padding_mask2 is not None:
+            padding_mask2 = padding_mask2[:,-self.mem_len:,:] #will me memory_padding at next iteration.
+
+        return hidden, new_mems, padding_mask2
 
 
 if __name__ == '__main__':
