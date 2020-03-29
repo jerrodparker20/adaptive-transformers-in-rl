@@ -780,7 +780,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                     for el in episode_returns:
                         last_n_episode_returns[(curr_index + 1) % flags.stats_episodes] = el.item()
                         curr_index += 1
-                        if el.item() > max_return:
+                        if el.item() >= max_return:
                             max_return = el.item()
                             max_return_step = step
                 stats.update({last_n_episode_return_key: last_n_episode_returns.mean().item()})
