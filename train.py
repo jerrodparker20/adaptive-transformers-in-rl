@@ -730,6 +730,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
+            zz1 = time.time()
             batch, agent_state = get_batch(
                 flags,
                 free_queue,
@@ -738,6 +739,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 initial_agent_state_buffers,
                 timings,
             )
+            zz2 = time.time()
+            
             logging.debug('Before Learn')
             stats = learn(
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
@@ -787,6 +790,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 if len(stats) > 0:
                     step += stats['num_unpadded_steps'] #stats.get('num_unpadded_steps', 0) #T * B
                     steps_since_sched_update += stats['num_unpadded_steps'] #.get('num_unpadded_steps', 0)
+            print('act took : ',zz2-zz1,' learn took : ',time.time()-zz2)
 
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
