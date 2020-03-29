@@ -723,7 +723,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         nonlocal step, stats, steps_since_sched_update, last_n_episode_returns
         # TODO : last_n_episode_returns and curr_index will be screwed if you use 1+ learner threads, keep in mind
         curr_index = -1
-        max_return = -999
+        max_return = -1e5
         max_return_step = 0
 
         timings = prof.Timings()
