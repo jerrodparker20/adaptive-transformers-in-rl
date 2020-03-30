@@ -372,7 +372,19 @@ def learn(
         # TODO: Add in adaptive attention (and think of how things change (for ex no memory))
         # print({key: batch[key].shape for key in batch})
         mems, mem_padding = None, None
-        stats = {}
+
+        # initialize stats
+        stats = {
+            "episode_returns": list(),
+            "mean_episode_return": list(),
+            "total_loss": 0,
+            "pg_loss": 0,
+            "baseline_loss": 0,
+            "entropy_loss": 0,
+            "num_unpadded_steps": 0,
+            "len_max_traj": 0
+        }
+
         logging.debug('AT LEARN')
         for i in range(0, flags.unroll_length + 1, flags.chunk_size):
             mini_batch = {key: batch[key][i:i + flags.chunk_size] for key in batch if key != 'len_traj'}
@@ -404,6 +416,12 @@ def learn(
 
             learner_outputs, unused_state, mems, mem_padding, curpad_mask, ind_first_done = model(mini_batch, initial_agent_state,
                                                                                      mems=mems, mem_padding=mem_padding)
+            # if mini_batch['done'].any():
+            #     www = time.time()
+            #     torch.save(mini_batch['done'],'./'+str(www)+'mini_batch_done.pt')
+            #     print("mini_batch['done'] true at ", www)
+            #     torch.save(ind_first_done, './' + str(www) + 'ind_first_done.pt')
+
             #to_print = False
             #if mini_batch['done'].sum().item() > 0:
             #    print('INds done: ', ind_first_done)
@@ -498,7 +516,7 @@ def learn(
             episode_returns = mini_batch["episode_return"][tmp_mask]
             num_unpadded_steps = (~mem_padding).sum().item() if mem_padding is not None else mini_batch_size
 
-            stats = {
+            stats_per_chunk = {
                 "episode_returns": tuple(episode_returns.cpu().numpy()),
                 "mean_episode_return": torch.mean(episode_returns).item(),
                 "total_loss": total_loss.item(),
@@ -508,13 +526,35 @@ def learn(
                 "num_unpadded_steps": num_unpadded_steps,
                 "len_max_traj": batch['len_traj'].max().item()
             }
-            # logging.debug('in learn with stats : %s', str(stats))
+            logging.debug('in learn with stats_per_chunk : %s', str(stats_per_chunk))
             optimizer.zero_grad()
             total_loss.backward()
+
+            # append the current stats_per_chunk with overall stats
+            stats['episode_returns'].extend(tuple(episode_returns.cpu().numpy()))
+            if torch.mean(episode_returns).item() == torch.mean(episode_returns).item():
+                stats["mean_episode_return"].append(torch.mean(episode_returns).item()),
+
+            stats["total_loss"] += total_loss.item()
+            stats["pg_loss"] += pg_loss.item()
+            stats["baseline_loss"] += baseline_loss.item()
+            stats["entropy_loss"] += entropy_loss.item()
+            stats["num_unpadded_steps"] += num_unpadded_steps
 
             nn.utils.clip_grad_norm_(model.parameters(), flags.grad_norm_clipping)
             optimizer.step()
             # scheduler is being stepped in the lock of batch_and_learn itself
+
+        # update len_max_traj separately since it doesnt depend on minibatches
+        stats["len_max_traj"] = batch['len_traj'].max().item()
+        # update the losses as the mean
+        total_num_minibatches = (flags.unroll_length + 1) // flags.chunk_size
+        stats["mean_episode_return"] = sum(stats["mean_episode_return"]) / total_num_minibatches
+        stats["total_loss"] /= total_num_minibatches
+        stats["pg_loss"] /= total_num_minibatches
+        stats["baseline_loss"] /= total_num_minibatches
+        stats["entropy_loss"] /= total_num_minibatches
+
 
         actor_model.load_state_dict(model.state_dict())
         return stats
