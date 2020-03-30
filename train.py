@@ -277,10 +277,10 @@ def act(
                 t += 1
 
             if env_output['done'].item():
-                for key in env_output:
-                    buffers[key][index][t + 1, ...] = env_output[key]
-                for key in agent_output:
-                    buffers[key][index][t + 1, ...] = agent_output[key]
+                #for key in env_output:
+                #    buffers[key][index][t + 1, ...] = env_output[key]
+                #for key in agent_output:
+                #    buffers[key][index][t + 1, ...] = agent_output[key]
 
                 mems = None
                 # Take arbitrary step to reset environment
