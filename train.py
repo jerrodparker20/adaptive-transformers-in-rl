@@ -905,12 +905,13 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             #     best_val_loss = val_loss
 
             logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
+                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s\n%s",
                 step,
                 sps,
                 total_loss,
                 mean_return,
                 pprint.pformat(stats),
+                optimizer.params_group[0]['lr']
             )
     except KeyboardInterrupt:
         return  # Try joining actors then quit.
