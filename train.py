@@ -514,7 +514,7 @@ def learn(
 
             # episode_returns = mini_batch["episode_return"][mini_batch["done"]]
             episode_returns = mini_batch["episode_return"][tmp_mask]
-            num_unpadded_steps = (~mem_padding).sum().item() if mem_padding is not None else mini_batch_size
+            num_unpadded_steps = (~curpad_mask).sum().item() if curpad_mask is not None else mini_batch_size
 
             stats_per_chunk = {
                 "episode_returns": tuple(episode_returns.cpu().numpy()),
