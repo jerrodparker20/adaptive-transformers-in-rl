@@ -382,7 +382,8 @@ def learn(
             "baseline_loss": 0,
             "entropy_loss": 0,
             "num_unpadded_steps": 0,
-            "len_max_traj": 0
+            "len_max_traj": 0,
+            "learning_rate":optimizer.param_groups[0]['lr']
         }
 
         logging.debug('AT LEARN')
@@ -755,6 +756,7 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
+        "learning_rate",
     ]
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
@@ -905,13 +907,12 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             #     best_val_loss = val_loss
 
             logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s\n%s",
+                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
                 step,
                 sps,
                 total_loss,
                 mean_return,
                 pprint.pformat(stats),
-                optimizer.params_group[0]['lr']
             )
     except KeyboardInterrupt:
         return  # Try joining actors then quit.
