@@ -224,7 +224,7 @@ def act(
 
         agent_state = model.initial_state(batch_size=1)
         mems, mem_padding = None, None
-        agent_output, unused_state, mems, mem_padding, pad_mask1, _ = model(env_output, agent_state, mems, mem_padding)
+        agent_output, unused_state, mems, pad_mask1, _ = model(env_output, agent_state, mems)
         while True:
             index = free_queue.get()
             if index is None:
@@ -254,7 +254,7 @@ def act(
                 #    mems = None
 
                 with torch.no_grad():
-                    agent_output, agent_state, mems, mem_padding, pad_mask1, _ = model(env_output, agent_state, mems, mem_padding)
+                    agent_output, agent_state, mems, pad_mask1, _ = model(env_output, agent_state, mems)
                 #if actor_index == 0:
                 #    logging.debug('actor: t: {}, mems size: {}, mem_padding size: {}'.format(t, mems[0].shape, mem_padding))
                 timings.time("model")
@@ -413,10 +413,9 @@ def learn(
 
             if flags.learner_no_mem:
                 mems = None
-                mem_padding = None
 
-            learner_outputs, unused_state, mems, mem_padding, curpad_mask, ind_first_done = model(mini_batch, initial_agent_state,
-                                                                                     mems=mems, mem_padding=mem_padding)
+            learner_outputs, unused_state, mems, curpad_mask, ind_first_done = model(mini_batch, initial_agent_state,
+                                                                                     mems=mems)
             # if mini_batch['done'].any():
             #     www = time.time()
             #     torch.save(mini_batch['done'],'./'+str(www)+'mini_batch_done.pt')
@@ -963,8 +962,8 @@ def test(flags, num_episodes: int = 10):
         if flags.mode == "test_render":
             env.gym_env.render()
 
-        agent_outputs, core_state, mems, mem_padding, _, ind_first_done = model(observation, mems=mems,
-                                                                             mem_padding=mem_padding)
+        agent_outputs, core_state, mems, _, ind_first_done = model(observation, mems=mems)
+
         observation = env.step(agent_outputs["action"])
         if observation["done"].item():
             returns.append(observation["episode_return"].item())
@@ -1121,7 +1120,7 @@ class AtariNet(nn.Module):
             for _ in range(2)
         )
 
-    def forward(self, inputs, core_state=(), mems=None, mem_padding=None):
+    def forward(self, inputs, core_state=(), mems=None):
 
         x = inputs["frame"]
         T, B, *_ = x.shape
@@ -1179,8 +1178,7 @@ class AtariNet(nn.Module):
         #    print('before mem mask: ', mem_padding.squeeze())
 
         #Mem_pad_mask is the memory_mask to use at the next iteration
-        core_output, mems, mem_pad_mask = self.core(core_input, mems, padding_mask=padding_mask,
-                                      mem_padding=mem_padding)  # core_input is of shape (T, B, ...)
+        core_output, mems = self.core(core_input, mems)  # core_input is of shape (T, B, ...)
         # core_output is (B, ...)
         #if mem_padding is not None:
         #    print('padding_mask AFTER : ', padding_mask.squeeze())
@@ -1219,7 +1217,7 @@ class AtariNet(nn.Module):
 
         return (
             dict(policy_logits=policy_logits, baseline=baseline, action=action),
-            core_state, mems, mem_pad_mask, padding_mask, ind_first_done
+            core_state, mems, padding_mask, ind_first_done
         )
 
 

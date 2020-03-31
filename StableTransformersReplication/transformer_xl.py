@@ -437,7 +437,7 @@ class MemTransformerLM(nn.Module):
     # TODO : We dropped dec_input since the first 2 dims of obs_emb should be the same as
     # that of dec_input, which is unrolled length = query length and batch_size
     # we saw this from             core_input = core_input.view(T, B, -1) line 668 in monobeast_test.py
-    def _forward(self, obs_emb, padding_mask, mems=None):
+    def _forward(self, obs_emb, mems=None):
 
         qlen, bsz, _ = obs_emb.size() #qlen is number of characters in input ex
 
@@ -453,23 +453,6 @@ class MemTransformerLM(nn.Module):
         # create the mask taking in consideration the mlen as well. All memory should be attended by the first query
         dec_attn_mask = torch.triu(
             obs_emb.new_ones(qlen, klen), diagonal=1+mlen).bool()[:,:,None]
-
-        # TODO: Possibly make this more efficient (check how much things slow down)
-        # This part only runs when calling model in "learn" since in "act" we will
-        # never need padding
-        if not (padding_mask is None):# and padding_mask.sum().item() > 0:
-            # concat the memory padding along with the padding_mask
-            #print('IN TXL')
-            #print('PADDING BEFORE: ', dec_attn_mask[:,:,0])
-            dec_attn_mask = dec_attn_mask.repeat(1,1,bsz)
-            dec_attn_mask = dec_attn_mask | padding_mask
-            #print('PADDING AFTER', [dec_attn_mask[:,:,x] for x in range(bsz)])
-            #print('Dec_attn_mask: ', dec_attn_mask[:,:,0])
-            #want the mlen diagonal to be 0's so that each query can attend
-            #to itself
-            dec_attn_mask[range(qlen), range(mlen, klen), :] = False
-            #print('AFTER: ', [dec_attn_mask[:,:,x] for x in range(bsz)])
-            #print('ATTN SHAPE: ', dec_attn_mask.shape)
 
         hids = []
         pos_seq = torch.arange(klen-1, -1, -1.0, device=obs_emb.device,
@@ -502,37 +485,15 @@ class MemTransformerLM(nn.Module):
         return core_out, new_mems
 
 
-    def forward(self, data, mems, padding_mask, mem_padding):
-        #padding_mask should be shape 1 X (mlen+qlen) X batch_size,
-        #which we apply row wise
+    def forward(self, data, mems):
 
         if not mems:
             # print('INITIALIZED MEMS')
             mems = self.init_mems()
 
-        #Concatenate mem_padding and padding_mask (slight modifications if None)
-        padding_mask2 = mem_padding
-        #print('mem_padding', mem_padding.shape if mem_padding is not None else None)
-        #print('PADDING MASK: ', padding_mask.shape if padding_mask is not None else None)
-        if padding_mask2 is None:
-            padding_mask2 = padding_mask
-        elif padding_mask is not None:
-            padding_mask2 = torch.cat([mem_padding, padding_mask], dim=1)
+        hidden, new_mems = self._forward(data, mems=mems)
 
-        '''
-        if mem_padding is not None and padding_mask is not None:
-            print('Adding orig: ', padding_mask[:,:,0])
-            print('mem_padding: ', mem_padding[:,:,0])
-            print('Result: ', padding_mask2[:,:,0])
-            print('DATA shape: ', data.shape)
-            print('mems shape: ', mems[0].shape)
-        '''
-        hidden, new_mems = self._forward(data, padding_mask=padding_mask2, mems=mems)
-
-        if padding_mask2 is not None:
-            padding_mask2 = padding_mask2[:,-self.mem_len:,:] #will me memory_padding at next iteration.
-
-        return hidden, new_mems, padding_mask2
+        return hidden, new_mems
 
 
 if __name__ == '__main__':
