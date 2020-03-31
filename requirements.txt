@@ -6,3 +6,4 @@ opencv-python  # for atari
 flake8
 black
 pre-commit
+tensorflow
