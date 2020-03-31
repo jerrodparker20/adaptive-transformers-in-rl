@@ -600,7 +600,7 @@ def get_scheduler(flags, optimizer):
         # because in previous versions eta_min is default to 0
         # rather than the default value of lr_min 1e-6
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
-                                                               flags.total_steps // flags.steps_btw_sched_updates,
+                                                               (flags.total_steps-flags.warmup_step) // flags.steps_btw_sched_updates,
                                                                eta_min=flags.eta_min)
     elif flags.scheduler == 'inv_sqrt':
         # originally used for Transformer (in Attention is all you need)
