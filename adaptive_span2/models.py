@@ -266,7 +266,7 @@ class TransformerSeq(nn.Module):
                 self.hidden_size).to(device=device)
             for layer in self.layers]
 
-        print('shape initial cache: {}, len: {} '.format(hid_cache[0].shape,len(hid_cache)))
+        #print('shape initial cache: {}, len: {} '.format(hid_cache[0].shape,len(hid_cache)))
         return hid_cache
 
     def get_adaptive_span_loss(self):

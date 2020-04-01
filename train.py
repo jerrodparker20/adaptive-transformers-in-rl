@@ -1246,7 +1246,7 @@ class AtariNet(nn.Module):
             #need output to T,B,H
             core_output = core_output.transpose(0,1)
 
-        print('Output shape: ', core_output.shape)
+        #print('Output shape: ', core_output.shape)
         #TODO Check what shape is in each case (want adaptive same as txl)
 
         policy_logits = self.policy(core_output)
