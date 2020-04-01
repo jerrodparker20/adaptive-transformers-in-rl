@@ -23,7 +23,7 @@ import timeit
 import traceback
 import typing
 from StableTransformersReplication.transformer_xl import MemTransformerLM
-
+from adaptive_span2.models import TransformerSeq as AdaptiveTransformer
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
 import torch
@@ -64,7 +64,27 @@ parser.add_argument("--n_layer", default=4, type=int,
 parser.add_argument("--d_inner", default=2048, type=int,
                     help="the position wise ff network dimension -> d_model x d_inner")
 parser.add_argument("--use_gate", action='store_true',
-                    help="whether to use gating in txl decoder")
+                    help="whether to use gating in transformer decoder")
+
+
+#Adaptive Transformer Settings
+parser.add_argument("--use_adaptive", action='store_true',
+                    help="whether to use the adaptive transformer, if not use TXL")
+parser.add_argument("--attn_span", default=1024, type=int,
+                    help="Attention span of adaptive transformer")
+parser.add_argument("--pers_mem_size", default=0, type=int,
+                    help="Number of persistent memory vectors")
+parser.add_argument("--adapt_span_loss", default=0.000002, type=float,
+                    help="the loss coefficient for span lengths")
+parser.add_argument("--adapt_span_ramp", default=32, type=int,
+                    help="ramp length of the soft masking function")
+parser.add_argument("--adapt_span_init", default=0.3, type=float,
+                    help="initial attention span ratio")
+parser.add_argument("--adapt_span_cache", action='store_true',
+                    help="adapt cache size as well to reduce memory usage")
+parser.add_argument("--dropout", default=0.1, type=float,
+                    help="dropout rate of ReLU and attention in adaptive model")
+
 
 # Training settings.
 parser.add_argument('--learner_no_mem', action='store_true',
@@ -103,9 +123,9 @@ parser.add_argument('--action_repeat', default=4, type=int,
 parser.add_argument('--stats_episodes', default=100, type=int,
                     help='report the mean episode returns of the last n episodes')
 
-# This is by default true in our case
-# parser.add_argument("--use_lstm", action="store_true",
-#                     help="Use LSTM in agent model.")
+
+parser.add_argument("--use_lstm", action="store_true",
+                     help="Use LSTM in agent model.")
 
 # Loss settings.
 parser.add_argument("--entropy_cost", default=0.01,
@@ -223,7 +243,10 @@ def act(
         env_output['done'] = torch.tensor([[0]], dtype=torch.uint8)
 
         agent_state = model.initial_state(batch_size=1)
-        mems, mem_padding = None, None
+        mems = None
+        if flags.use_adaptive:
+            mems = model.core.initial_cache(batch_size=1, device=None)
+
         agent_output, unused_state, mems, pad_mask1, _ = model(env_output, agent_state, mems)
         while True:
             index = free_queue.get()
@@ -283,6 +306,9 @@ def act(
                 #    buffers[key][index][t + 1, ...] = agent_output[key]
 
                 mems = None
+                if flags.use_adaptive:
+                    mems = model.core.initial_cache(batch_size=1, device=None)
+
                 # Take arbitrary step to reset environment
                 logging.debug('actor: {}, RETURN: {}'.format(actor_index, env_output['episode_return']))
                 env_output = env.step(torch.tensor([2]))
@@ -371,7 +397,9 @@ def learn(
         # TODO: Change batch function to look for trajectories of similar lengths
         # TODO: Add in adaptive attention (and think of how things change (for ex no memory))
         # print({key: batch[key].shape for key in batch})
-        mems, mem_padding = None, None
+        mems = None
+        if flags.use_adaptive:
+            mems = model.core.initial_cache(batch_size=flags.batch_size, device=flags.device)
 
         # initialize stats
         stats = {
@@ -495,6 +523,11 @@ def learn(
             )
 
             total_loss = pg_loss + baseline_loss + entropy_loss
+
+            #Now adding L1 norm of adaptive span params (is already multiplied
+            #by scaling coefficient (chosen hyper param)).
+            if flags.use_adaptive:
+                total_loss += model.core.get_adaptive_span_loss()
 
             # tmp_mask is defined above
             if ind_first_done is not None:
@@ -957,7 +990,9 @@ def test(flags, num_episodes: int = 10):
     returns = []
 
     mems = None
-    mem_padding = None
+    if flags.use_adaptive:
+        mems = model.core.initial_cache(batch_size=1, device=None)
+
     while len(returns) < num_episodes:
         if flags.mode == "test_render":
             env.gym_env.render()
@@ -1103,22 +1138,49 @@ class AtariNet(nn.Module):
         # TODO : 1st replacement, sanity check the parameters
         # TODO : play around with d_inner, this is the dimension for positionwise feedforward hidden projection
         # TODO : Change the n_layer=1 to 12
-        self.core = MemTransformerLM(n_token=None, n_layer=flags.n_layer, n_head=8, d_head=core_output_size // 8,
-                                     d_model=core_output_size, d_inner=flags.d_inner,
-                                     dropout=0.1, dropatt=0.0, mem_len=flags.mem_len,  # TODO : CHeck if tgt_len=None causes any issue
-                                     use_stable_version=True, use_gate=flags.use_gate)
-        self.core.apply(weights_init)
+        self.adaptive_span = flags.use_adaptive
+        self.hidden_size = core_output_size
+        pers_mem_params = {'pers_mem_size': flags.pers_mem_size}
+        adapt_span_params = {
+                      'adapt_span_enabled': True,
+                      'adapt_span_loss': flags.adapt_span_loss,
+                      'adapt_span_ramp': flags.adapt_span_ramp,
+                      'adapt_span_init': flags.adapt_span_init,
+                      'adapt_span_cache': flags.adapt_span_cache
+                  }
+
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
 
+        if flags.use_adaptive:
+            self.core = AdaptiveTransformer(hidden_size=self.hidden_size, nb_heads=4, nb_layers=flags.n_layer,
+                                            attn_span=flags.attn_span, flags=flags, dropout=flags.dropout, adapt_span_params=adapt_span_params,
+                                            pers_mem_params=pers_mem_params, inner_hidden_size=flags.d_inner
+                                            )
+        else:
+            self.core = MemTransformerLM(n_token=None, n_layer=flags.n_layer, n_head=4, d_head=core_output_size // 4,
+                                     d_model=core_output_size, d_inner=flags.d_inner,
+                                     dropout=0.1, dropatt=0.0, mem_len=flags.mem_len,  # TODO : CHeck if tgt_len=None causes any issue
+                                     use_stable_version=True, use_gate=flags.use_gate)
+
+            self.core.apply(weights_init)
+            self.core.init_gru_bias()
+            self.policy.apply(weights_init)
+            self.baseline.apply(weights_init)
+
+        #print('GRU BIAS AFTER: ',self.core.layers[0].gate_mha.linear_w_z.bias)
+
+
     def initial_state(self, batch_size):
-        # if not self.use_lstm:
-        #     return tuple()
+
+        return tuple()
+        '''
         return tuple(
             # torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
             torch.zeros(self.core.n_layer, batch_size, self.core.d_model)
             for _ in range(2)
         )
+        '''
 
     def forward(self, inputs, core_state=(), mems=None):
 
@@ -1169,19 +1231,23 @@ class AtariNet(nn.Module):
         padding_mask = padding_mask.unsqueeze(0)
         if padding_mask.shape[1] == 1:
             padding_mask = None #This means we're in act or test so no need for padding
-        #else:
-        #    print('NOT SETTING TO 1: ',padding_mask.shape)
-        #if not padding_mask.any().item():  # In this case no need for padding_mask
-        #    padding_mask = None
-        #if not mem_padding is None:
-        #    print('Before pad mask: ', padding_mask.squeeze())
-        #    print('before mem mask: ', mem_padding.squeeze())
 
-        #Mem_pad_mask is the memory_mask to use at the next iteration
-        core_output, mems = self.core(core_input, mems)  # core_input is of shape (T, B, ...)
-        # core_output is (B, ...)
-        #if mem_padding is not None:
-        #    print('padding_mask AFTER : ', padding_mask.squeeze())
+        # core_input is of shape (T, B, ...)
+        if self.adaptive_span:
+            logging.debug('USING ADAPTIVE')
+            #need input to B,T,H
+            core_input = core_input.transpose(0,1)
+
+        #mems is just the cache if using adaptive
+        core_output, mems = self.core(core_input, mems)
+
+        if self.adaptive_span:
+            logging.debug('USING ADAPTIVE')
+            #need output to T,B,H
+            core_output = core_output.transpose(0,1)
+
+        print('Output shape: ', core_output.shape)
+        #TODO Check what shape is in each case (want adaptive same as txl)
 
         policy_logits = self.policy(core_output)
         baseline = self.baseline(core_output)
