@@ -138,8 +138,8 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
-        dec_inp2 = self.layer_norm1(dec_inp)
-        dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
+        # dec_inp2 = self.layer_norm1(dec_inp)
+        dec_inp2 = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
                                 attn_mask=dec_attn_mask,
                                 mems=mems, use_stable_version=self.use_stable_version)
 
