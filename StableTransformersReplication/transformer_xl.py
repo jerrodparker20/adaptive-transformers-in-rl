@@ -118,8 +118,11 @@ class RelPartialLearnableDecoderLayer(nn.Module):
 
         self.use_gate = use_gate
         self.use_stable_version = use_stable_version
-        self.gate_mha = GRUGate(d_model)
-        self.gate_mlp = GRUGate(d_model)
+
+        if self.use_gate:
+            self.gate_mha = GRUGate(d_model)
+            self.gate_mlp = GRUGate(d_model)
+
         self.norm1 = LayerNorm(d_model)
         self.norm2 = LayerNorm(d_model)
 

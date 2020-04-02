@@ -185,8 +185,10 @@ class TransformerSeqLayer(nn.Module):
 
         self.use_gate = flags.use_gate
         self.use_stable_version = True #use_stable_version
-        self.gate_mha = GRUGate(hidden_size)
-        self.gate_mlp = GRUGate(hidden_size)
+
+        if self.use_gate:
+            self.gate_mha = GRUGate(hidden_size)
+            self.gate_mlp = GRUGate(hidden_size)
 
     def forward_orig(self, h, h_cache, key_pe):
 
