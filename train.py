@@ -611,7 +611,7 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
     buffers: Buffers = {key: [] for key in specs}
     for _ in range(flags.num_buffers):
         for key in buffers:
-            buffers[key].append(torch.empty(**specs[key]).share_memory_())
+            buffers[key].append(torch.zeros(**specs[key]).share_memory_())
     return buffers
 
 
