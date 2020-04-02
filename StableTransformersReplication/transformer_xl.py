@@ -74,8 +74,8 @@ class GRUGate(nn.Module):
 
     def init_bias(self):
         with torch.no_grad():
-            self.linear_w_z.bias.fill_(-3)  # Manually setting this bias to allow starting with markov process
-            # Note -3 is the setting used in the paper stable transformers
+            self.linear_w_z.bias.fill_(-2)  # Manually setting this bias to allow starting with markov process
+            # Note -2 is the setting used in the paper stable transformers
 
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
