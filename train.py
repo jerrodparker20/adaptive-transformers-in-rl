@@ -1165,7 +1165,10 @@ class AtariNet(nn.Module):
                                      use_stable_version=True, use_gate=flags.use_gate)
 
             self.core.apply(weights_init)
-            self.core.init_gru_bias()
+
+            if flags.use_gate:
+                self.core.init_gru_bias()
+                
             self.policy.apply(weights_init)
             self.baseline.apply(weights_init)
 
