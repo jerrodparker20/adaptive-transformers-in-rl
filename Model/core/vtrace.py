@@ -136,12 +136,14 @@ def from_importance_weights(
             if val != -1:
                 end_idx = val-1
             result = []
+            # print('end idx : {}, ind_first_done : {}'.format(end_idx, ind_first_done))
             for t in range(end_idx-1, -1, -1):
                 acc[idx] = deltas[t, idx] + discounts[t, idx] * cs[t, idx] * acc[idx]
                 result.append(acc[idx])
-            result.reverse()
-            # result.extend(torch.zeros_like(result[0]).repeat(discounts.shape[0]-end_idx))
-            vs_minus_v_xs[:len(result), idx] = torch.stack(result)
+            if len(result) > 0:
+                result.reverse()
+                # result.extend(torch.zeros_like(result[0]).repeat(discounts.shape[0]-end_idx))
+                vs_minus_v_xs[:len(result), idx] = torch.stack(result)
 
 
         # Add V(x_s) to get v_s.
