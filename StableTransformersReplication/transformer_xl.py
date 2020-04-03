@@ -148,6 +148,7 @@ class RelPartialLearnableDecoderLayer(nn.Module):
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
         #dec_inp2 = self.layer_norm1(dec_inp)
         #First Layer norm will be applied within dec_attn
+
         dec_inp2 = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
                                 attn_mask=dec_attn_mask,
                                 mems=mems, use_stable_version=self.use_stable_version)
