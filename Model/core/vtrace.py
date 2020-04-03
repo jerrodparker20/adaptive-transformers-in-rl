@@ -63,6 +63,7 @@ def from_logits(
     rewards,
     values,
     bootstrap_value,
+    ind_first_done,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
 ):
@@ -77,6 +78,7 @@ def from_logits(
         rewards=rewards,
         values=values,
         bootstrap_value=bootstrap_value,
+        ind_first_done=ind_first_done,
         clip_rho_threshold=clip_rho_threshold,
         clip_pg_rho_threshold=clip_pg_rho_threshold,
     )
@@ -95,6 +97,7 @@ def from_importance_weights(
     rewards,
     values,
     bootstrap_value,
+    ind_first_done,
     clip_rho_threshold=1.0,
     clip_pg_rho_threshold=1.0,
 ):
@@ -113,13 +116,33 @@ def from_importance_weights(
         )
         deltas = clipped_rhos * (rewards + discounts * values_t_plus_1 - values)
 
-        acc = torch.zeros_like(bootstrap_value)
-        result = []
-        for t in range(discounts.shape[0] - 1, -1, -1):
-            acc = deltas[t] + discounts[t] * cs[t] * acc
-            result.append(acc)
-        result.reverse()
-        vs_minus_v_xs = torch.stack(result)
+
+
+        #
+        # acc = torch.zeros_like(bootstrap_value)
+        # result = []
+        # for t in range(discounts.shape[0] - 1, -1, -1):
+        #     acc = deltas[t] + discounts[t] * cs[t] * acc
+        #     result.append(acc)
+        # result.reverse()
+        # vs_minus_v_xs = torch.stack(result)
+
+
+        acc = [0]*bootstrap_value.size(0)
+        vs_minus_v_xs = torch.zeros_like(discounts)
+        for idx in range(ind_first_done.shape[0]):
+            end_idx = discounts.shape[0]
+            val = ind_first_done[idx].item()
+            if val != -1:
+                end_idx = val-1
+            result = []
+            for t in range(end_idx-1, -1, -1):
+                acc[idx] = deltas[t, idx] + discounts[t, idx] * cs[t, idx] * acc[idx]
+                result.append(acc[idx])
+            result.reverse()
+            # result.extend(torch.zeros_like(result[0]).repeat(discounts.shape[0]-end_idx))
+            vs_minus_v_xs[:len(result), idx] = torch.stack(result)
+
 
         # Add V(x_s) to get v_s.
         vs = torch.add(vs_minus_v_xs, values)

@@ -495,6 +495,8 @@ def learn(
                 rewards=clipped_rewards,
                 values=learner_outputs["baseline"],
                 bootstrap_value=bootstrap_value,
+                ind_first_done=ind_first_done,             # -1 to compensate the one shifted arrays will
+                                                           # be taken care in the function from_importance_weights
             )
 
             # TODO Next Step: the losses also have to be computed with the padding, think on a structure of mask
@@ -979,7 +981,7 @@ def test(flags, num_episodes: int = 10):
         env = dmlab_environment.Environment(gym_env)
 
     if flags.atari:
-        model = Net(env.observation_space.shape, env.action_space.n, flags=flags)
+        model = Net(env.gym_env.observation_space.shape, env.action_space.n, flags=flags)
     else:
         model = Net(env.initial().shape, len(dmlab_environment.DEFAULT_ACTION_SET), flags=flags)
 
