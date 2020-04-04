@@ -58,7 +58,7 @@ parser.add_argument("--total_steps", default=100000, type=int, metavar="T",
                     help="Total environment steps to train for.")
 parser.add_argument("--batch_size", default=8, type=int, metavar="B",
                     help="Learner batch size.")
-parser.add_argument("--unroll_length", default=80, type=int, metavar="T",
+parser.add_argument("--unroll_length", default=200, type=int, metavar="T",
                     help="The unroll length (time dimension).")
 parser.add_argument("--num_buffers", default=None, type=int,
                     metavar="N", help="Number of shared-memory buffers.")
@@ -76,8 +76,8 @@ parser.add_argument("--baseline_cost", default=0.5,
                     type=float, help="Baseline cost/multiplier.")
 parser.add_argument("--discounting", default=0.99,
                     type=float, help="Discounting factor.")
-parser.add_argument("--reward_clipping", default="abs_one",
-                    choices=["abs_one", "none"],
+parser.add_argument("--reward_clipping", default="none",
+                    choices=["abs_one", "abs_one"],
                     help="Reward clipping.")
 
 # Optimizer settings.
@@ -91,6 +91,8 @@ parser.add_argument("--epsilon", default=0.01, type=float,
                     help="RMSProp epsilon.")
 parser.add_argument("--grad_norm_clipping", default=40.0, type=float,
                     help="Global gradient norm clip.")
+parser.add_argument('--stats_episodes', default=100, type=int,
+                    help='report the mean episode returns of the last n episodes')
 # yapf: enable
 
 
@@ -103,6 +105,14 @@ logging.basicConfig(
 
 Buffers = typing.Dict[str, typing.List[torch.Tensor]]
 
+def get_model_parameters(model):
+        total_parameters = 0
+        for layer in list(model.parameters()):
+            layer_parameter = 1
+            for l in list(layer.size()):
+                layer_parameter *= l
+            total_parameters += layer_parameter
+        return total_parameters
 
 def compute_baseline_loss(advantages):
     return 0.5 * torch.sum(advantages ** 2)
@@ -166,9 +176,7 @@ def act(
                     agent_output, agent_state = model(env_output, agent_state)
 
                 timings.time("model")
-
-
-
+ 
                 env_output = env.step(agent_output["action"])
 
                 timings.time("step")
@@ -349,7 +357,6 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
     env = create_env(flags,level_names[0],1)
     model = Net(env.initial().shape, len(environment.DEFAULT_ACTION_SET), flags.use_lstm)
     buffers = create_buffers(flags, env._observation().shape, model.num_actions)
-    print(env._observation().shape)
     model.share_memory()
 
     # Add initial RNN state.
@@ -366,7 +373,7 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
     full_queue = ctx.SimpleQueue()
     ##########I changed this part
     for i in range(flags.num_actors):
-        level_name= level_names[i%len(level_names)]
+        level_name= level_names[0]
         actor = ctx.Process(
             target=act,
             args=(
@@ -386,7 +393,7 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
     learner_model = Net(
         env._observation().shape,len(environment.DEFAULT_ACTION_SET), flags.use_lstm
     ).to(device=flags.device)
-
+    print('--------------- TOTAL MODEL PARAMETERS : {} ---------------'.format(get_model_parameters(learner_model)))
     optimizer = torch.optim.RMSprop(
         learner_model.parameters(),
         lr=flags.learning_rate,
@@ -399,11 +406,13 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
         return 1 - min(epoch * T * B, flags.total_steps) / flags.total_steps
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
+    last_n_episode_return_key = "last_{}_episode_returns".format(flags.stats_episodes)
     logger = logging.getLogger("logfile")
     stat_keys = [
         "total_loss",
         "mean_episode_return",
+        last_n_episode_return_key,
+        "max_return_achieved",
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
@@ -411,10 +420,15 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
     step, stats = 0, {}
+    last_n_episode_returns = torch.zeros((flags.stats_episodes))
+    steps_since_sched_update = 0
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
-        nonlocal step, stats
+        nonlocal step, stats, steps_since_sched_update, last_n_episode_returns
+        curr_index = -1
+        max_return = -1e5
+        max_return_step = 0
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
@@ -431,11 +445,23 @@ def train(flags,level_names):  # pylint: disable=too-many-branches, too-many-sta
             )
             timings.time("learn")
             with lock:
+                
+                episode_returns = stats.get("episode_returns", None)
+                if episode_returns:
+                    for el in episode_returns:
+                         last_n_episode_returns[(curr_index + 1) % flags.stats_episodes] = el.item()
+                         curr_index += 1
+                         if el.item() >= max_return:
+                             max_return = el.item()
+                             max_return_step = step
+                stats.update({last_n_episode_return_key: last_n_episode_returns.mean().item()})
+                stats.update({'max_return_achieved':'{} at step {}'.format(max_return, max_return_step)})
+
+
                 to_log = dict(step=step)
-                to_log.update({k: stats[k] for k in stat_keys})
+                to_log.update({k: stats.get(k, None) for k in stat_keys})
                 plogger.log(to_log)
                 step += T * B
-
         if i == 0:
             logging.info("Batch and learn: %s", timings.summary())
 
@@ -551,25 +577,68 @@ class AtariNet(nn.Module):
         self.observation_shape = observation_shape
         self.num_actions = num_actions
 
-        # Feature extraction.
-        self.conv1 = nn.Conv2d(
-            in_channels=self.observation_shape[0],
-            out_channels=32,
-            kernel_size=8,
-            stride=4,
-        )
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.feat_convs = []
+        self.resnet1 = []
+        self.resnet2 = []
+
+        self.convs = []
+        input_channels = self.observation_shape[0]
+        for num_ch in [16, 32, 32]:
+            feats_convs = []
+            feats_convs.append(
+                nn.Conv2d(
+                    in_channels=input_channels,
+                    out_channels=num_ch,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                )
+            )
+            feats_convs.append(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            self.feat_convs.append(nn.Sequential(*feats_convs))
+
+            input_channels = num_ch
+
+            for i in range(2):
+                resnet_block = []
+                resnet_block.append(nn.ReLU())
+                resnet_block.append(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=num_ch,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    )
+                )
+                resnet_block.append(nn.ReLU())
+                resnet_block.append(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=num_ch,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                    )
+                )
+                if i == 0:
+                    self.resnet1.append(nn.Sequential(*resnet_block))
+                else:
+                    self.resnet2.append(nn.Sequential(*resnet_block))
+
+        self.feat_convs = nn.ModuleList(self.feat_convs)
+        self.resnet1 = nn.ModuleList(self.resnet1)
+        self.resnet2 = nn.ModuleList(self.resnet2)
 
         # Fully connected layer.
-        self.fc = nn.Linear(2560, 512)
+        self.fc = nn.Linear(3456, 256)
 
         # FC output size + one-hot of last action + last reward.
         core_output_size = self.fc.out_features + num_actions + 1
-
-        self.use_lstm = use_lstm
-        if use_lstm:
-            self.core = nn.LSTM(core_output_size, core_output_size, 2)
+        ###############################################################transformer
+        self.use_lstm = True
+        if self.use_lstm:
+            self.core = nn.LSTM(core_output_size, core_output_size, 4)
 
         self.policy = nn.Linear(core_output_size, self.num_actions)
         self.baseline = nn.Linear(core_output_size, 1)
@@ -583,13 +652,23 @@ class AtariNet(nn.Module):
         )
 
     def forward(self, inputs, core_state=()):
-        x = inputs["frame"]  # [T, B, C, H, W].
+
+        x = inputs["frame"]
         T, B, *_ = x.shape
         x = torch.flatten(x, 0, 1)  # Merge time and batch.
         x = x.float() / 255.0
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
+
+        res_input = None
+        for i, fconv in enumerate(self.feat_convs):
+            x = fconv(x)
+            res_input = x
+            x = self.resnet1[i](x)
+            x += res_input
+            res_input = x
+            x = self.resnet2[i](x)
+            x += res_input
+
+        x = F.relu(x)
         x = x.view(T * B, -1)
         x = F.relu(self.fc(x))
 
@@ -598,7 +677,7 @@ class AtariNet(nn.Module):
         ).float()
         clipped_reward = torch.clamp(inputs["reward"], -1, 1).view(T * B, 1)
         core_input = torch.cat([x, clipped_reward, one_hot_last_action], dim=-1)
-
+        ###############################################################transformer
         if self.use_lstm:
             core_input = core_input.view(T, B, -1)
             core_output_list = []
@@ -651,7 +730,7 @@ def create_env(flags,level_name,seed=1):
 def main(flags):
 
     if flags.mode == "train":
-        level_names = list(dmlab30.LEVEL_MAPPING.keys())
+        level_names = ["explore_goal_locations_small"]
         train(flags,level_names)
     else:
         level_names = list(dmlab30.LEVEL_MAPPING.values())
@@ -661,3 +740,5 @@ def main(flags):
 if __name__ == "__main__":
     flags = parser.parse_args()
     main(flags)
+
+

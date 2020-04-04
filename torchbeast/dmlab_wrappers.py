@@ -62,7 +62,7 @@ class createDmLab(object):
     return d['RGBD']
 
   def step(self, action):
-    reward = self._env.step(action)#, num_steps=self._num_action_repeats)
+    reward = self._env.step(action,  num_steps=4)
     done = np.array(not self._env.is_running())
     if done:
       self._reset()
