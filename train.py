@@ -868,6 +868,20 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 stats.update({last_n_episode_return_key: last_n_episode_returns.mean().item()})
                 stats.update({'max_return_achieved':'{} at step {}'.format(max_return, max_return_step)})
 
+                #Get max span per layer in learner_model
+                max_spans = []
+                for layer in learner_model.core.layers:
+                    if flags.use_adaptive:
+                        max_spans.append(layer.attn.attn.adaptive_span._mask.get_current_max_size())
+
+                    else:
+                        max_spans.append(0)
+
+                    #TODO CHECK THAT TYPE OF MAX SPAN DOESNT BREAK LOGGER
+                print('MAX SPANS: ', max_spans)
+                #Add max spans to plogger (add the dummy spans if not adaptive)
+
+
                 to_log = dict(step=step)
                 to_log.update({k: stats.get(k, None) for k in stat_keys})
                 plogger.log(to_log)
