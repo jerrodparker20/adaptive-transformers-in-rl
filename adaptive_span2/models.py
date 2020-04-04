@@ -83,6 +83,8 @@ class SeqAttention(nn.Module):
         attn_cont = torch.matmul(query, key.transpose(-1, -2))
         attn_cont = _unskew(attn_cont)  # B x M x L
 
+        attn_cont[attn_cont==0] = -1e6 #don't want to attend to padding.
+
         # compute the effect of position embedding
         attn_pos = torch.matmul(query, key_pe)  # B x M x L_pos
         attn = attn_cont + attn_pos
@@ -190,7 +192,7 @@ class TransformerSeqLayer(nn.Module):
             self.gate_mha = GRUGate(hidden_size)
             self.gate_mlp = GRUGate(hidden_size)
 
-    def forward_orig(self, h, h_cache, key_pe):
+    def forward_orig(self, h, h_cache, key_pe, cache_size):
 
         # h = B x M x H
         # h_cache = B x L x H
@@ -205,7 +207,7 @@ class TransformerSeqLayer(nn.Module):
         return out
 
 
-    def forward_stable(self, h, h_cache, key_pe):
+    def forward_stable(self, h, h_cache, key_pe, cache_size):
         # Layer norm will be applied at start of MHA module on both dec_inp2 and mems
 
         #print('original h shape: ', h.shape)
@@ -235,11 +237,11 @@ class TransformerSeqLayer(nn.Module):
 
         return dec_inp3
 
-    def forward(self, h, h_cache, key_pe):
+    def forward(self, h, h_cache, key_pe, cache_size):
         if self.use_stable_version:
-            return self.forward_stable(h, h_cache, key_pe)
+            return self.forward_stable(h, h_cache, key_pe, cache_size)
 
-        return self.forward_orig(h, h_cache, key_pe)
+        return self.forward_orig(h, h_cache, key_pe, cache_size)
 
 
 
@@ -268,6 +270,7 @@ class TransformerSeq(nn.Module):
                 self.hidden_size).to(device=device)
             for layer in self.layers]
 
+        self.cache_size = 0
         #print('shape initial cache: {}, len: {} '.format(hid_cache[0].shape,len(hid_cache)))
         return hid_cache
 
@@ -293,6 +296,8 @@ class TransformerSeq(nn.Module):
             else:
                 h_cache_next_l = h[:, -cache_size:, :].detach()
             h_cache_next.append(h_cache_next_l)
-            h = layer(h, h_cache[l], self.key_pe)  # B x M x H
+            h = layer(h, h_cache[l], self.key_pe, self.cache_size)  # B x M x H
+
+        self.cache_size += block_size
 
         return h, h_cache_next
