@@ -62,13 +62,20 @@ class GRUGate(nn.Module):
         #d_model is dimension of embedding for each token as input to layer (want to maintain this in the gate)
         super(GRUGate,self).__init__()
 
-        # TODO: DEBUG Make sure intitialize biases to small positive number like in paper
+        # TODO: DEBUG Make sure intitialize bias of linear_w_z to -3
         self.linear_w_r = nn.Linear(d_model,d_model,bias=False)
         self.linear_u_r = nn.Linear(d_model,d_model,bias=False)
         self.linear_w_z = nn.Linear(d_model,d_model)               ### Giving bias to this layer (will count as b_g so can just initialize negative)
         self.linear_u_z = nn.Linear(d_model, d_model,bias=False)
         self.linear_w_g = nn.Linear(d_model, d_model,bias=False)
         self.linear_u_g = nn.Linear(d_model, d_model,bias=False)
+
+        self.init_bias()
+
+    def init_bias(self):
+        with torch.no_grad():
+            self.linear_w_z.bias.fill_(-2)  # Manually setting this bias to allow starting with markov process
+            # Note -2 is the setting used in the paper stable transformers
 
     def forward(self,x,y):
         ### Here x,y follow from notation in paper
@@ -77,8 +84,6 @@ class GRUGate(nn.Module):
         r = torch.sigmoid(self.linear_w_r(y) + self.linear_u_r(x))
         h_hat = torch.tanh(self.linear_w_g(y) + self.linear_u_g(r*x))  #Note elementwise multiplication of r and x
         return (1.-z)*x + z*h_hat
-
-
 
 
 class PositionwiseFF(nn.Module):
@@ -113,8 +118,11 @@ class RelPartialLearnableDecoderLayer(nn.Module):
 
         self.use_gate = use_gate
         self.use_stable_version = use_stable_version
-        self.gate_mha = GRUGate(d_model)
-        self.gate_mlp = GRUGate(d_model)
+
+        if self.use_gate:
+            self.gate_mha = GRUGate(d_model)
+            self.gate_mlp = GRUGate(d_model)
+
         self.norm1 = LayerNorm(d_model)
         self.norm2 = LayerNorm(d_model)
 
@@ -138,8 +146,10 @@ class RelPartialLearnableDecoderLayer(nn.Module):
     def forward_stable(self, dec_inp, r, r_w_bias, r_r_bias, dec_attn_mask=None, mems=None):
 
         #Layer norm will be applied at start of MHA module on both dec_inp2 and mems
-        dec_inp2 = self.layer_norm1(dec_inp)
-        dec_inp2 = self.dec_attn(dec_inp2, r, r_w_bias, r_r_bias,
+        #dec_inp2 = self.layer_norm1(dec_inp)
+        #First Layer norm will be applied within dec_attn
+
+        dec_inp2 = self.dec_attn(dec_inp, r, r_w_bias, r_r_bias,
                                 attn_mask=dec_attn_mask,
                                 mems=mems, use_stable_version=self.use_stable_version)
 
@@ -374,6 +384,11 @@ class MemTransformerLM(nn.Module):
         self.clamp_len = clamp_len
 
         self._create_params()
+
+    def init_gru_bias(self):
+        for l in self.layers:
+            l.gate_mha.init_bias()
+            l.gate_mlp.init_bias()
 
     def backward_compatible(self):
         self.sample_softmax = -1
