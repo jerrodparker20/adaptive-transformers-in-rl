@@ -12,9 +12,10 @@ Install the python module for DMLab– https://github.com/deepmind/lab/tree/mast
 Downloading Atari: Getting Started with Gym
 
 Execution notes:
-The experiments take around 4 hours on 32vCPUs and 2 P100 GPUs for 6 million environment interactions.
-To run without a GPU, use the flag “--disable_cuda”
-For more details on other flags, see the top of train.py (include a link to this file) which has descriptions for each.
+1. The experiments take around 4 hours on 32vCPUs and 2 P100 GPUs for 6 million environment interactions.
+To run without a GPU, use the flag “--disable_cuda”.
+2. For more details on other flags, see the top of train.py (include a link to this file) which has descriptions for each.
+3. All experiments use a slightly revised version of [IMPALA](https://arxiv.org/abs/1802.01561) from [torchbeast](https://github.com/facebookresearch/torchbeast)
 
 Best performing adaptive attention span model on “rooms_select_nonmatching_object”:
 ```
