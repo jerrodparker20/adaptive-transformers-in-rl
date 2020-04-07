@@ -870,6 +870,17 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
                 to_log = dict(step=step)
                 to_log.update({k: stats.get(k, None) for k in stat_keys})
+
+                # Now keep track of the max span per layer and log them in the csv file if adaptive is enabled
+                if flags.use_adaptive:
+                    # Get max span per layer in learner_model
+                    max_spans = []
+                    for layer in learner_model.core.layers:
+                        max_spans.append(layer.attn.attn.adaptive_span._mask.get_current_max_size())
+                    print('MAX SPANS : ', max_spans)
+                    for i, span_val in enumerate(max_spans):
+                        to_log.update({'max_span_layer_'+str(i): span_val})
+
                 plogger.log(to_log)
                 # print('updating step from {} to {}'.format(step, step+(T*B)))
                 if len(stats) > 0:
