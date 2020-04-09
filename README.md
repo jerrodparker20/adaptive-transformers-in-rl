@@ -4,7 +4,7 @@ In this experiment we replicate several results from [Stabilizing Transformers f
 
 We also extend the Stable Transformer architecture with [Adaptive Attention Span](https://arxiv.org/abs/1905.07799) on a partially observable (POMDP) setting of Reinforcement Learning. To our knowledge this is one of the first attempts to stabilize and explore Adaptive Attention Span in an RL domain.
 
-The paper for this work will be attached here once it is public on arxiv.
+The arxiv preprint for this work can be found here [Adaptive Transformers in RL](http://arxiv.org/abs/2004.03761)
 
 ### Steps to replicate what we did on your own machine
 1. Downloading DMLab: 
